@@ -1,4 +1,5 @@
 mod config;
+mod embedded;
 mod fetch;
 mod paths;
 mod util;

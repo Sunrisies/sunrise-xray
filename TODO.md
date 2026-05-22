@@ -10,6 +10,7 @@
   - 位置：`src/xray.rs:23-29`
 - [x] **#2 下载的 xray 二进制无校验** — 从 5 个第三方镜像下任意字节当可执行文件运行，没有 SHA256/签名校验，镜像被投毒就完蛋。release JSON 里有官方 sha256，可比对
   - 位置：`src/xray.rs:144-159`
+  - 备注：后续整体改为编译期 embed + SHA256 校验后，运行时下载路径已删除
 - [x] **#4 只识别 VLESS+REALITY** — 订阅里的 vmess / trojan / ss / hysteria2 全被丢弃
   - 位置：`src/config.rs:22-32`
   - 备注：VLESS（REALITY/TLS/none）+ Trojan + VMess + Shadowsocks 已支持；Hysteria2 是 xray 不原生支持的协议，需要额外集成 sing-box 才能跑，独立议题
@@ -20,10 +21,12 @@
   - 位置：`src/main.rs:12`、`src/xray.rs:10`
 - [ ] **#6 端口硬编码 10808/10809** — 不可配。需要 env 或 CLI 参数
   - 位置：`src/main.rs:10-11`
-- [ ] **#7 GitHub release API 匿名调用** — 共享 IP 容易被 429。支持 `GITHUB_TOKEN` env
+- [x] **#7 GitHub release API 匿名调用** — 共享 IP 容易被 429。支持 `GITHUB_TOKEN` env
   - 位置：`src/xray.rs:9, 77-87`
-- [ ] **#8 `which` 命令不跨平台** — Windows 没 `which`。改用 `which` crate
+  - 备注：xray 现在改为编译期 embed，运行时不再调 GitHub API，问题消解
+- [x] **#8 `which` 命令不跨平台** — Windows 没 `which`。改用 `which` crate
   - 位置：`src/xray.rs:56-67`
+  - 备注：xray 改为编译期 embed 后已删除自动发现逻辑
 - [ ] **#9 xray 日志无文件落地、无轮转** — stdout/stderr 直接 inherit，长跑撑爆日志文件
   - 位置：`src/xray.rs:206-207`
 - [ ] **#10 失败无重试** — 订阅请求 + 单镜像下载都是一次失败就跳，没有 backoff 重试
@@ -39,8 +42,9 @@
 
 - [ ] **#14 零测试** — `config.rs` 的 URI 解析、`fetch.rs` 的 base64 兼容（URL-safe / padding）边界条件都没 unit test
   - 位置：全仓
-- [ ] **#15 `extract_xray_bin` 未显式拒绝路径遍历** — 目前靠白名单文件名兜底，没用 `entry.enclosed_name()` 校验，逻辑一变就会有 zip-slip 风险
+- [x] **#15 `extract_xray_bin` 未显式拒绝路径遍历** — 目前靠白名单文件名兜底，没用 `entry.enclosed_name()` 校验，逻辑一变就会有 zip-slip 风险
   - 位置：`src/xray.rs:161-197`
+  - 备注：解压的 zip 现在来自编译期校验过 SHA256 的可信源（GitHub release），白名单兜底仍在
 - [ ] **#16 路由规则写死** — cn 直连、`domainStrategy` 都硬编码，没法配
   - 位置：`src/config.rs:156-167`
 - [ ] **#17 VLESS 网络层只生成 tcp 配置** — 没有 `wsSettings`/`grpcSettings`/`httpSettings`，订阅里有 ws/grpc 节点会启动后连不通

@@ -8,11 +8,11 @@
 
 | 文件 | 作用 |
 |---|---|
-| `~/.local/bin/sunrise-xray` | 守护进程二进制（launchd 用这个） |
+| `~/.local/bin/sunrise-xray` | 守护进程二进制（launchd 用这个），自带 xray |
 | `~/Desktop/rust/sunrise-xray/` | 源码与构建目录 |
 | `~/Library/LaunchAgents/com.sunrise-xray.proxy.plist` | 开机/登录自动起 |
 | `~/.zshrc` 末尾的 `# >>> sunrise-xray proxy >>>` 段 | 自动 export 环境变量 + `proxy` 函数 |
-| `~/Library/Caches/sunrise-xray/bin/{xray,geoip.dat,geosite.dat}` | 自下载的 xray 与数据文件（Linux 上是 `~/.cache/sunrise-xray/bin/`） |
+| `~/Library/Caches/sunrise-xray/bin/{xray,geoip.dat,geosite.dat,version.tag}` | 首次启动从内置 zip 释放的 xray 与数据文件（Linux 上是 `~/.cache/sunrise-xray/bin/`） |
 | `~/Library/Caches/sunrise-xray/xray_config.json` | 运行时生成的 xray 配置（Linux 上是 `~/.cache/sunrise-xray/xray_config.json`） |
 | `/tmp/sunrise-xray.log` | launchd 重定向的实时日志 |
 
@@ -195,8 +195,7 @@ tail -50 /tmp/sunrise-xray.log
 常见原因：
 - **`SUNRISE_SUB_URL` 未设置** → 检查 launchd plist 的 `EnvironmentVariables`，或手动运行时 `export SUNRISE_SUB_URL=...`
 - **订阅 URL 失效** → 网站给的链接换了，更新环境变量即可，无需重新编译
-- **GitHub 下载 xray 全部超时** → 5 个镜像都不行的情况罕见，等几小时再试，或手动 `brew install xray` 后程序会自动用系统的
-- **xray 启动失败** → 通常是数据文件丢了，删除缓存目录（macOS: `~/Library/Caches/sunrise-xray/`、Linux: `~/.cache/sunrise-xray/`）让它重新下载
+- **xray 启动失败** → 通常是数据文件丢了，删除 cache 目录的 `version.tag`（或整个 `bin/`），下次启动会重新从内置 zip 释放
 
 ### 3. 重启 Mac 后没自动起来
 
@@ -254,15 +253,19 @@ rm -rf ~/Library/Caches/sunrise-xray /tmp/sunrise-xray.log
 ## 七、源码结构（备忘）
 
 ```
+build.rs       # 编译期下载 xray release zip + SHA256 校验
 src/
 ├── main.rs       # 主流程：拉订阅 → 解析 → 写配置 → 启 xray
 ├── fetch.rs      # HTTP + base64 解码订阅
-├── config.rs     # 解析 vless:// URI + 构造 xray outbound JSON
+├── config.rs     # 解析各类 URI + 构造 xray outbound JSON
 ├── paths.rs      # XDG 缓存/配置路径
-└── xray.rs       # 查找/下载 xray（GitHub + 5 个镜像回退）+ 进程管理
+├── util.rs       # 共享的容错 base64 解码
+├── embedded.rs   # 嵌入的 xray zip + 首次运行解压
+└── xray.rs       # 调用嵌入的 xray 进程
 ```
 
 依赖：`tokio`, `reqwest`, `serde_json`, `anyhow`, `zip`, `base64`, `url`, `percent-encoding`, `clap`, `dirs`。
+Build deps：`ureq`, `sha2`, `serde_json`, `anyhow`。
 
 ---
 
