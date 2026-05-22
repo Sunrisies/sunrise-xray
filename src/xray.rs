@@ -1,3 +1,4 @@
+use crate::paths;
 use anyhow::{Context, Result};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -7,7 +8,6 @@ use tokio::process::Command;
 use tokio::signal;
 
 const RELEASES_API: &str = "https://api.github.com/repos/XTLS/Xray-core/releases/latest";
-const CACHE_DIR: &str = "/tmp/sunrise-xray-bin";
 
 /// 下载 zip 时尝试的 URL 前缀，空串代表直连 GitHub。
 /// 这些镜像把 `https://github.com/...` 当作路径转发，所以 `format!("{prefix}{github_url}")` 即可。
@@ -43,7 +43,7 @@ pub async fn ensure_xray() -> Result<PathBuf> {
         return Ok(found);
     }
 
-    let cached = PathBuf::from(CACHE_DIR).join("xray");
+    let cached = paths::xray_bin_path()?;
     if cached.is_file() {
         return Ok(cached);
     }
@@ -198,7 +198,7 @@ fn extract_xray_bin(zip_bytes: &[u8], target: &Path) -> Result<()> {
 
 /// 启动 xray，阻塞直到 Ctrl+C 或子进程退出。
 /// kill_on_drop 保证主程序异常退出时子进程也会被回收。
-pub async fn run_xray(binary: &Path, config: &str) -> Result<()> {
+pub async fn run_xray(binary: &Path, config: &Path) -> Result<()> {
     let mut cmd = Command::new(binary);
     cmd.arg("run")
         .arg("-c")

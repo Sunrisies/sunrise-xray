@@ -1,5 +1,6 @@
 mod config;
 mod fetch;
+mod paths;
 mod xray;
 
 use anyhow::{anyhow, Context, Result};
@@ -10,7 +11,6 @@ use url::Url;
 const SUB_URL_ENV: &str = "SUNRISE_SUB_URL";
 const SOCKS_PORT: u16 = 10808;
 const HTTP_PORT: u16 = 10809;
-const CONFIG_PATH: &str = "/tmp/xray_config.json";
 
 /// 把订阅链接自动拉成本地 Xray 代理服务的小工具。
 ///
@@ -52,12 +52,15 @@ async fn run() -> Result<()> {
         node.name, node.address, node.port
     );
 
-    println!("[3/4] 生成本地配置: {CONFIG_PATH}");
+    let config_path = paths::xray_config_path()?;
+    paths::ensure_parent(&config_path).await?;
+
+    println!("[3/4] 生成本地配置: {}", config_path.display());
     let local = config::build_local_config(&node.outbound, SOCKS_PORT, HTTP_PORT);
     let bytes = serde_json::to_vec_pretty(&local).context("序列化本地配置失败")?;
-    tokio::fs::write(CONFIG_PATH, &bytes)
+    tokio::fs::write(&config_path, &bytes)
         .await
-        .with_context(|| format!("写入配置文件失败: {CONFIG_PATH}"))?;
+        .with_context(|| format!("写入配置文件失败: {}", config_path.display()))?;
 
     println!("[4/4] 准备 xray 可执行文件...");
     let binary = xray::ensure_xray().await?;
@@ -72,5 +75,5 @@ async fn run() -> Result<()> {
     println!("==============================================");
     println!();
 
-    xray::run_xray(&binary, CONFIG_PATH).await
+    xray::run_xray(&binary, &config_path).await
 }

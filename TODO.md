@@ -17,7 +17,7 @@
 
 ## P1 — 健壮性 / 体验
 
-- [ ] **#5 路径全写 /tmp** — 系统重启清空，Linux 多用户冲突。改 XDG（`~/.cache/`、`~/.config/`），用 `dirs` crate
+- [x] **#5 路径全写 /tmp** — 系统重启清空，Linux 多用户冲突。改 XDG（`~/.cache/`、`~/.config/`），用 `dirs` crate
   - 位置：`src/main.rs:12`、`src/xray.rs:10`
 - [ ] **#6 端口硬编码 10808/10809** — 不可配。需要 env 或 CLI 参数
   - 位置：`src/main.rs:10-11`
