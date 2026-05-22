@@ -19,8 +19,9 @@
 
 - [x] **#5 路径全写 /tmp** — 系统重启清空，Linux 多用户冲突。改 XDG（`~/.cache/`、`~/.config/`），用 `dirs` crate
   - 位置：`src/main.rs:12`、`src/xray.rs:10`
-- [ ] **#6 端口硬编码 10808/10809** — 不可配。需要 env 或 CLI 参数
+- [x] **#6 端口硬编码 10808/10809** — 不可配。需要 env 或 CLI 参数
   - 位置：`src/main.rs:10-11`
+  - 备注：已加 `--socks-port` / `--http-port` 与 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT`，CLI 优先；运行前校验两端口不相同且不为 0
 - [x] **#7 GitHub release API 匿名调用** — 共享 IP 容易被 429。支持 `GITHUB_TOKEN` env
   - 位置：`src/xray.rs:9, 77-87`
   - 备注：xray 现在改为编译期 embed，运行时不再调 GitHub API，问题消解
@@ -55,8 +56,9 @@
   - 位置：仓库根
 - [x] **#20 `user_agent` 写死 "0.1"** — 升级版本号 user-agent 还停留在旧值，应用 `env!("CARGO_PKG_VERSION")`
   - 位置：`src/xray.rs:72`、`src/fetch.rs:8`
-- [ ] **#21 没有 CI** — 没 GitHub Actions，跨平台编译没人验证
+- [x] **#21 没有 CI** — 没 GitHub Actions，跨平台编译没人验证
   - 位置：仓库根
+  - 备注：已加 `.github/workflows/ci.yml`（push/PR 跑 check+test）和 `release.yml`（推 `v*` tag 触发 5 平台编译：macOS x86_64/arm64、Linux x86_64/arm64 musl、Windows x86_64；产物含 SHA256，自动挂到 GitHub Release）
 
 ---
 

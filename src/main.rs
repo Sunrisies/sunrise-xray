@@ -11,8 +11,8 @@ use std::process::ExitCode;
 use url::Url;
 
 const SUB_URL_ENV: &str = "SUNRISE_SUB_URL";
-const SOCKS_PORT: u16 = 10808;
-const HTTP_PORT: u16 = 10809;
+const DEFAULT_SOCKS_PORT: u16 = 10808;
+const DEFAULT_HTTP_PORT: u16 = 10809;
 
 /// 把订阅链接自动拉成本地 Xray 代理服务的小工具。
 ///
@@ -28,6 +28,14 @@ struct Cli {
     /// 列出订阅里所有可用节点后退出，不下载 xray、不启动代理。
     #[arg(long)]
     list: bool,
+
+    /// 本地 SOCKS5 监听端口。也可通过 SUNRISE_SOCKS_PORT 环境变量传入，命令行参数优先。
+    #[arg(long, env = "SUNRISE_SOCKS_PORT", default_value_t = DEFAULT_SOCKS_PORT)]
+    socks_port: u16,
+
+    /// 本地 HTTP 监听端口。也可通过 SUNRISE_HTTP_PORT 环境变量传入，命令行参数优先。
+    #[arg(long, env = "SUNRISE_HTTP_PORT", default_value_t = DEFAULT_HTTP_PORT)]
+    http_port: u16,
 }
 
 #[tokio::main]
@@ -43,6 +51,14 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    anyhow::ensure!(
+        cli.socks_port != cli.http_port,
+        "SOCKS 与 HTTP 端口不能相同（都设置为 {}）",
+        cli.socks_port
+    );
+    anyhow::ensure!(cli.socks_port != 0, "SOCKS 端口不能为 0");
+    anyhow::ensure!(cli.http_port != 0, "HTTP 端口不能为 0");
+
     let sub_url_raw = std::env::var(SUB_URL_ENV)
         .map_err(|_| anyhow!("环境变量 {SUB_URL_ENV} 未设置；请设置订阅地址后再运行"))?;
     let sub_url = Url::parse(&sub_url_raw)
@@ -80,7 +96,7 @@ async fn run(cli: Cli) -> Result<()> {
     paths::ensure_parent(&config_path).await?;
 
     println!("[3/4] 生成本地配置: {}", config_path.display());
-    let local = config::build_local_config(&node.outbound, SOCKS_PORT, HTTP_PORT);
+    let local = config::build_local_config(&node.outbound, cli.socks_port, cli.http_port);
     let bytes = serde_json::to_vec_pretty(&local).context("序列化本地配置失败")?;
     tokio::fs::write(&config_path, &bytes)
         .await
@@ -93,8 +109,8 @@ async fn run(cli: Cli) -> Result<()> {
     println!();
     println!("==============================================");
     println!("  代理已启动，可用入口：");
-    println!("    SOCKS5  ->  socks5://127.0.0.1:{SOCKS_PORT}");
-    println!("    HTTP    ->  http://127.0.0.1:{HTTP_PORT}");
+    println!("    SOCKS5  ->  socks5://127.0.0.1:{}", cli.socks_port);
+    println!("    HTTP    ->  http://127.0.0.1:{}", cli.http_port);
     println!("  按 Ctrl+C 退出");
     println!("==============================================");
     println!();

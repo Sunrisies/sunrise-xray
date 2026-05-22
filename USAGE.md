@@ -17,8 +17,8 @@
 | `/tmp/sunrise-xray.log` | launchd 重定向的实时日志 |
 
 端口：
-- **SOCKS5**: `127.0.0.1:10808`
-- **HTTP**: `127.0.0.1:10809`
+- **SOCKS5**: `127.0.0.1:10808`（可通过 `--socks-port` / `SUNRISE_SOCKS_PORT` 改）
+- **HTTP**: `127.0.0.1:10809`（可通过 `--http-port` / `SUNRISE_HTTP_PORT` 改）
 
 订阅源：通过 `SUNRISE_SUB_URL` 环境变量传入（在 launchd plist 的 `EnvironmentVariables` 里配置）
 
@@ -141,6 +141,27 @@ launchd 启动时在 plist `EnvironmentVariables` 里加 `SUNRISE_NODE`：
 ```
 
 订阅顺序变化后索引会漂移，长期跑用名字子串更稳定。
+
+### 切换端口
+
+默认 SOCKS5 10808 / HTTP 10809。CLI 或环境变量都行（CLI 优先）：
+
+```bash
+sunrise-xray --socks-port 1080 --http-port 1081
+# 或：
+SUNRISE_SOCKS_PORT=1080 SUNRISE_HTTP_PORT=1081 sunrise-xray
+```
+
+launchd 启动时在 plist `EnvironmentVariables` 里加：
+
+```xml
+<key>SUNRISE_SOCKS_PORT</key>
+<string>1080</string>
+<key>SUNRISE_HTTP_PORT</key>
+<string>1081</string>
+```
+
+改端口后记得同步更新 `~/.zshrc` 里的 `http_proxy` / `https_proxy` / `all_proxy` 环境变量。
 
 ### 看实时日志
 

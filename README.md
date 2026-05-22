@@ -13,6 +13,8 @@
 - SOCKS5：`127.0.0.1:10808`
 - HTTP：`127.0.0.1:10809`
 
+可通过 `--socks-port` / `--http-port` 或 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT` 环境变量修改（CLI 优先）。
+
 ## 快速开始
 
 ```bash
@@ -24,10 +26,12 @@ export SUNRISE_SUB_URL='https://你的订阅地址'
 ./target/release/sunrise-xray                 # 用第 0 个节点启动
 ./target/release/sunrise-xray --node 3        # 用第 3 个节点启动
 ./target/release/sunrise-xray --node 香港     # 选名字含「香港」的第一个节点
+./target/release/sunrise-xray --socks-port 1080 --http-port 1081   # 自定义端口
 ```
 
 订阅地址通过 `SUNRISE_SUB_URL` 环境变量传入，**不要硬编码进源码**。
 节点选择可通过 `--node` 参数或 `SUNRISE_NODE` 环境变量指定（CLI 优先）。
+端口可通过 `--socks-port` / `--http-port` 或 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT` 指定。
 
 ### 编译时
 
@@ -65,6 +69,38 @@ src/
 ## 详细用法
 
 部署到 launchd / systemd 自启、配置 zsh/bash 自动 export 代理环境变量、日常运维与故障排查，见 [USAGE.md](./USAGE.md)。
+
+## 发布流程
+
+`.github/workflows/` 下有两条流水线：
+
+- **ci.yml** — push 到 main 或 PR 时跑 `cargo check` + `cargo test`
+- **release.yml** — 推 `v*` tag 时自动多平台交叉编译并发布到 GitHub Release
+
+发新版本：
+
+```bash
+# 1. 改 Cargo.toml 版本号
+# 2. 提交
+git commit -am "Release v0.2.0"
+# 3. 打 tag 并推送（Action 会被触发）
+git tag v0.2.0
+git push origin main v0.2.0
+```
+
+Action 跑完会在仓库的 Releases 页面挂上 5 个产物（每个都带 `.sha256` 校验文件）：
+
+| 文件 | 适用平台 |
+|---|---|
+| `sunrise-xray-vX.Y.Z-x86_64-apple-darwin.tar.gz` | Intel Mac |
+| `sunrise-xray-vX.Y.Z-aarch64-apple-darwin.tar.gz` | Apple Silicon Mac |
+| `sunrise-xray-vX.Y.Z-x86_64-unknown-linux-musl.tar.gz` | x86_64 Linux（静态链接，全发行版通用） |
+| `sunrise-xray-vX.Y.Z-aarch64-unknown-linux-musl.tar.gz` | ARM64 Linux（服务器 / 树莓派 4+） |
+| `sunrise-xray-vX.Y.Z-x86_64-pc-windows-msvc.zip` | 64 位 Windows |
+
+也支持在 Actions 页面手动触发（workflow_dispatch）做 dry-run，不会创建 Release。
+
+预发布版本（tag 含 `-`，如 `v0.2.0-rc1`）会自动标记为 prerelease。
 
 ## License
 
