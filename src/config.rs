@@ -4,48 +4,111 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use url::Url;
 
-/// 已挑选好的 VLESS + REALITY 节点：节点别名 + 可直接塞进 Xray 的 outbound JSON。
+/// 解析好的代理节点：name + protocol + 可直接塞进 Xray outbounds 的 JSON。
 pub struct ProxyNode {
     pub name: String,
+    pub protocol: &'static str,
     pub address: String,
     pub port: u16,
     pub outbound: Value,
 }
 
-/// 从订阅文本中挑选第一个 VLESS+REALITY 节点。
-/// 顺带把所有 REALITY 候选的名字打印出来，方便调试 / 后续做选择。
-pub fn pick_reality_node(content: &str) -> Result<ProxyNode> {
-    let mut reality_lines = Vec::new();
+/// 节点选择方式：默认（第一个）/ 按索引 / 按名字子串。
+pub enum NodeSelector {
+    Default,
+    Index(usize),
+    Name(String),
+}
 
-    for line in content.lines() {
+/// 解析 `--node` / `SUNRISE_NODE` 字符串：纯数字按索引，否则按名字子串匹配。
+pub fn parse_selector(s: &str) -> NodeSelector {
+    let s = s.trim();
+    if s.is_empty() {
+        return NodeSelector::Default;
+    }
+    if let Ok(i) = s.parse::<usize>() {
+        return NodeSelector::Index(i);
+    }
+    NodeSelector::Name(s.to_string())
+}
+
+/// 按指定方式从节点列表中挑选一个，返回 (index, node)。
+pub fn pick_node<'a>(
+    nodes: &'a [ProxyNode],
+    sel: &NodeSelector,
+) -> Result<(usize, &'a ProxyNode)> {
+    anyhow::ensure!(!nodes.is_empty(), "没有可用的节点");
+    match sel {
+        NodeSelector::Default => Ok((0, &nodes[0])),
+        NodeSelector::Index(i) => nodes
+            .get(*i)
+            .map(|n| (*i, n))
+            .with_context(|| format!("节点索引 {i} 超出范围（共 {} 个）", nodes.len())),
+        NodeSelector::Name(needle) => {
+            let needle_lc = needle.to_lowercase();
+            nodes
+                .iter()
+                .enumerate()
+                .find(|(_, n)| n.name.to_lowercase().contains(&needle_lc))
+                .with_context(|| format!("没有名字包含 '{needle}' 的节点"))
+        }
+    }
+}
+
+/// 打印节点列表。`selected_idx` 给出会在对应行前标 `*`。
+pub fn print_node_list(nodes: &[ProxyNode], selected_idx: Option<usize>) {
+    println!("       共 {} 个可用节点：", nodes.len());
+    for (i, n) in nodes.iter().enumerate() {
+        let marker = if Some(i) == selected_idx { "*" } else { " " };
+        println!(
+            "        {marker} [{i:02}] {:<7} {} ({}:{})",
+            n.protocol, n.name, n.address, n.port
+        );
+    }
+}
+
+/// 遍历订阅文本的所有行，按 URI scheme 分派到具体 parser；汇总解析结果。
+/// 不能识别 / 解析失败的节点会打印一行 stderr 提示，不会让整体失败。
+pub fn parse_subscription(text: &str) -> Vec<ProxyNode> {
+    let mut nodes = Vec::new();
+    let mut skipped_protocol: HashMap<String, usize> = HashMap::new();
+    let mut skipped_reason: Vec<(String, String)> = Vec::new();
+
+    for line in text.lines() {
         let line = line.trim();
-        if !line.starts_with("vless://") {
+        if line.is_empty() {
             continue;
         }
-        let url = match Url::parse(line) {
-            Ok(u) => u,
-            Err(_) => continue,
+        let scheme = match line.split_once("://") {
+            Some((s, _)) => s.to_lowercase(),
+            None => continue,
         };
-        let is_reality = url
-            .query_pairs()
-            .any(|(k, v)| k == "security" && v == "reality");
-        if is_reality {
-            reality_lines.push(url);
+
+        let parsed = match scheme.as_str() {
+            "vless" => parse_vless_uri(line),
+            _ => {
+                *skipped_protocol.entry(scheme).or_insert(0) += 1;
+                continue;
+            }
+        };
+
+        match parsed {
+            Ok(n) => nodes.push(n),
+            Err(e) => {
+                let preview = line.chars().take(72).collect::<String>();
+                skipped_reason.push((preview, format!("{e:#}")));
+            }
         }
     }
 
-    if reality_lines.is_empty() {
-        anyhow::bail!("订阅中没有找到 VLESS+REALITY 节点");
+    for (proto, count) in &skipped_protocol {
+        eprintln!("       跳过 {count} 个 {proto}:// 节点（暂不支持的协议）");
+    }
+    for (uri, reason) in &skipped_reason {
+        eprintln!("       跳过节点 {uri}... 原因: {reason}");
     }
 
-    println!("       发现 {} 个 REALITY 节点：", reality_lines.len());
-    for (i, u) in reality_lines.iter().enumerate() {
-        let name = fragment_name(u);
-        let marker = if i == 0 { "*" } else { " " };
-        println!("        {marker} [{i:02}] {name}");
-    }
-
-    vless_reality_to_outbound(&reality_lines[0])
+    nodes
 }
 
 fn fragment_name(url: &Url) -> String {
@@ -60,16 +123,13 @@ fn fragment_name(url: &Url) -> String {
         })
 }
 
-/// 把 `vless://uuid@host:port?security=reality&pbk=...&sid=...&sni=...&flow=...&fp=...#name`
-/// 转换成 Xray outbound JSON。
-fn vless_reality_to_outbound(url: &Url) -> Result<ProxyNode> {
+fn parse_vless_uri(line: &str) -> Result<ProxyNode> {
+    let url = Url::parse(line).context("vless URL 解析失败")?;
+
     let id = url.username().to_string();
     anyhow::ensure!(!id.is_empty(), "VLESS URI 缺少 UUID");
 
-    let address = url
-        .host_str()
-        .context("VLESS URI 缺少 host")?
-        .to_string();
+    let address = url.host_str().context("VLESS URI 缺少 host")?.to_string();
     let port = url.port().context("VLESS URI 缺少 port")?;
 
     let q: HashMap<String, String> = url
@@ -77,25 +137,52 @@ fn vless_reality_to_outbound(url: &Url) -> Result<ProxyNode> {
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
 
-    let network = q.get("type").cloned().unwrap_or_else(|| "tcp".into());
+    let network = q.get("type").map(String::as_str).unwrap_or("tcp");
+    anyhow::ensure!(
+        network == "tcp",
+        "暂不支持 type={network} 的 VLESS 流传输（仅支持 tcp）"
+    );
+
+    let security = q.get("security").map(String::as_str).unwrap_or("none");
     let flow = q.get("flow").cloned().unwrap_or_default();
-    let sni = q.get("sni").cloned().unwrap_or_default();
-    let pbk = q.get("pbk").cloned().unwrap_or_default();
-    let sid = q.get("sid").cloned().unwrap_or_default();
-    let fp = q.get("fp").cloned().unwrap_or_else(|| "chrome".into());
 
-    anyhow::ensure!(!pbk.is_empty(), "REALITY 节点缺少 publicKey (pbk)");
-
-    let name = fragment_name(url);
-
-    let mut user = json!({
-        "id": id,
-        "encryption": "none"
-    });
+    let mut user = json!({ "id": id, "encryption": "none" });
     if !flow.is_empty() {
         user["flow"] = Value::String(flow);
     }
 
+    let mut stream = json!({
+        "network": "tcp",
+        "security": security,
+    });
+
+    match security {
+        "reality" => {
+            let pbk = q
+                .get("pbk")
+                .filter(|s| !s.is_empty())
+                .context("REALITY 节点缺少 publicKey (pbk)")?;
+            let sni = q.get("sni").cloned().unwrap_or_default();
+            let sid = q.get("sid").cloned().unwrap_or_default();
+            let fp = q.get("fp").cloned().unwrap_or_else(|| "chrome".into());
+            stream["realitySettings"] = json!({
+                "serverName": sni,
+                "publicKey": pbk,
+                "shortId": sid,
+                "fingerprint": fp,
+                "show": false,
+            });
+        }
+        "tls" => {
+            stream["tlsSettings"] = build_tls_settings(&q, &address);
+        }
+        "none" => {
+            // 没有额外的安全层设置
+        }
+        other => anyhow::bail!("不支持的 VLESS security: {other}"),
+    }
+
+    let name = fragment_name(&url);
     let outbound = json!({
         "tag": "proxy",
         "protocol": "vless",
@@ -103,28 +190,47 @@ fn vless_reality_to_outbound(url: &Url) -> Result<ProxyNode> {
             "vnext": [{
                 "address": address,
                 "port": port,
-                "users": [user]
-            }]
+                "users": [user],
+            }],
         },
-        "streamSettings": {
-            "network": network,
-            "security": "reality",
-            "realitySettings": {
-                "serverName": sni,
-                "publicKey": pbk,
-                "shortId": sid,
-                "fingerprint": fp,
-                "show": false
-            }
-        }
+        "streamSettings": stream,
     });
 
     Ok(ProxyNode {
         name,
+        protocol: "vless",
         address,
         port,
         outbound,
     })
+}
+
+fn build_tls_settings(q: &HashMap<String, String>, address: &str) -> Value {
+    let sni = q
+        .get("sni")
+        .cloned()
+        .unwrap_or_else(|| address.to_string());
+    let fp = q.get("fp").cloned().unwrap_or_else(|| "chrome".into());
+    let allow_insecure = q
+        .get("allowInsecure")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let mut tls = json!({
+        "serverName": sni,
+        "fingerprint": fp,
+        "allowInsecure": allow_insecure,
+    });
+    if let Some(alpn) = q.get("alpn") {
+        let parts: Vec<&str> = alpn
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !parts.is_empty() {
+            tls["alpn"] = json!(parts);
+        }
+    }
+    tls
 }
 
 /// 基于挑好的代理出站，构造完整的本地 Xray 配置。
@@ -165,4 +271,142 @@ pub fn build_local_config(proxy_outbound: &Value, socks_port: u16, http_port: u1
             ]
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selector_default_for_empty_or_whitespace() {
+        assert!(matches!(parse_selector(""), NodeSelector::Default));
+        assert!(matches!(parse_selector("   "), NodeSelector::Default));
+    }
+
+    #[test]
+    fn selector_index_for_digits() {
+        assert!(matches!(parse_selector("0"), NodeSelector::Index(0)));
+        assert!(matches!(parse_selector("42"), NodeSelector::Index(42)));
+    }
+
+    #[test]
+    fn selector_name_for_anything_else() {
+        match parse_selector("香港") {
+            NodeSelector::Name(s) => assert_eq!(s, "香港"),
+            _ => panic!("expected Name"),
+        }
+        match parse_selector("hk-01") {
+            NodeSelector::Name(s) => assert_eq!(s, "hk-01"),
+            _ => panic!("expected Name"),
+        }
+    }
+
+    fn fake_node(name: &str) -> ProxyNode {
+        ProxyNode {
+            name: name.into(),
+            protocol: "vless",
+            address: "example.com".into(),
+            port: 443,
+            outbound: json!({}),
+        }
+    }
+
+    #[test]
+    fn pick_default_returns_first() {
+        let nodes = vec![fake_node("a"), fake_node("b")];
+        let (i, n) = pick_node(&nodes, &NodeSelector::Default).unwrap();
+        assert_eq!(i, 0);
+        assert_eq!(n.name, "a");
+    }
+
+    #[test]
+    fn pick_index_in_range() {
+        let nodes = vec![fake_node("a"), fake_node("b"), fake_node("c")];
+        let (i, n) = pick_node(&nodes, &NodeSelector::Index(2)).unwrap();
+        assert_eq!(i, 2);
+        assert_eq!(n.name, "c");
+    }
+
+    #[test]
+    fn pick_index_out_of_range_errors() {
+        let nodes = vec![fake_node("a")];
+        assert!(pick_node(&nodes, &NodeSelector::Index(5)).is_err());
+    }
+
+    #[test]
+    fn pick_name_case_insensitive_substring() {
+        let nodes = vec![
+            fake_node("US-01 美国"),
+            fake_node("HK-02 香港高速"),
+            fake_node("JP-03 日本"),
+        ];
+        let (i, _) = pick_node(&nodes, &NodeSelector::Name("香港".into())).unwrap();
+        assert_eq!(i, 1);
+        let (i, _) = pick_node(&nodes, &NodeSelector::Name("hk".into())).unwrap();
+        assert_eq!(i, 1);
+    }
+
+    #[test]
+    fn pick_name_no_match_errors() {
+        let nodes = vec![fake_node("a")];
+        assert!(pick_node(&nodes, &NodeSelector::Name("zzz".into())).is_err());
+    }
+
+    #[test]
+    fn pick_from_empty_errors() {
+        let nodes: Vec<ProxyNode> = vec![];
+        assert!(pick_node(&nodes, &NodeSelector::Default).is_err());
+    }
+
+    #[test]
+    fn parse_subscription_vless_reality() {
+        let text = "vless://aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee@example.com:443\
+            ?type=tcp&security=reality&pbk=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\
+            &sid=abcd&sni=cdn.cloudflare.com&fp=chrome&flow=xtls-rprx-vision#HK-01";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "HK-01");
+        assert_eq!(nodes[0].protocol, "vless");
+        assert_eq!(nodes[0].port, 443);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["security"], "reality");
+        assert!(stream["realitySettings"]["publicKey"].is_string());
+    }
+
+    #[test]
+    fn parse_subscription_vless_tls() {
+        let text = "vless://uuid-here@example.com:443?type=tcp&security=tls&sni=foo.com#TLS-01";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["security"], "tls");
+        assert_eq!(stream["tlsSettings"]["serverName"], "foo.com");
+    }
+
+    #[test]
+    fn parse_subscription_skips_ws_transport() {
+        let text = "vless://uuid@example.com:443?type=ws&security=tls#WS-Node";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_skips_unsupported_scheme() {
+        let text = "vmess://eyJ2IjoiMiJ9\nss://YWVzLTI1Ni1nY206cGFzcw@example.com:8388";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_mixed_and_blank_lines() {
+        let text = "\n\
+            vless://uuid@a.com:443?security=reality&pbk=xyz#A\n\
+            \n\
+            # comment that won't match\n\
+            vless://uuid@b.com:443?security=none#B\n";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].name, "A");
+        assert_eq!(nodes[1].name, "B");
+    }
 }

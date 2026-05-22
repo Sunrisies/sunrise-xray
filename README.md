@@ -20,10 +20,14 @@ git clone https://github.com/Sunrisies/sunrise-xray.git
 cd sunrise-xray
 cargo build --release
 export SUNRISE_SUB_URL='https://你的订阅地址'
-./target/release/sunrise-xray
+./target/release/sunrise-xray --list          # 看订阅里有哪些节点
+./target/release/sunrise-xray                 # 用第 0 个节点启动
+./target/release/sunrise-xray --node 3        # 用第 3 个节点启动
+./target/release/sunrise-xray --node 香港     # 选名字含「香港」的第一个节点
 ```
 
 订阅地址通过 `SUNRISE_SUB_URL` 环境变量传入，**不要硬编码进源码**。
+节点选择可通过 `--node` 参数或 `SUNRISE_NODE` 环境变量指定（CLI 优先）。
 
 ## 项目结构
 

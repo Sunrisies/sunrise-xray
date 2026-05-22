@@ -119,7 +119,28 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sunrise-xray.proxy.p
 
 ### 切换节点
 
-目前固定挑列表第 0 个 REALITY 节点。要改：编辑 `src/config.rs` 的 `pick_reality_node` 函数，把 `reality_lines[0]` 改成你想要的索引。或者改造成读 `NODE_INDEX` 环境变量（需要时找 Claude 加）。
+通过 CLI 参数或环境变量选择（CLI 优先）：
+
+```bash
+sunrise-xray --list             # 列出订阅里所有节点和索引
+sunrise-xray                    # 默认用第 0 个节点
+sunrise-xray --node 3           # 按索引选第 3 个
+sunrise-xray --node 香港        # 按名字子串匹配（大小写不敏感）
+```
+
+launchd 启动时在 plist `EnvironmentVariables` 里加 `SUNRISE_NODE`：
+
+```xml
+<key>EnvironmentVariables</key>
+<dict>
+    <key>SUNRISE_SUB_URL</key>
+    <string>https://你的订阅地址</string>
+    <key>SUNRISE_NODE</key>
+    <string>香港</string>
+</dict>
+```
+
+订阅顺序变化后索引会漂移，长期跑用名字子串更稳定。
 
 ### 看实时日志
 
