@@ -1,5 +1,7 @@
 use crate::paths;
 use anyhow::{Context, Result};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -77,12 +79,12 @@ async fn which_xray() -> Option<PathBuf> {
 async fn download_latest_xray(target: &Path) -> Result<()> {
     let asset_name = xray_asset_name()?;
     let client = reqwest::Client::builder()
-        .user_agent("sunrise-xray/0.1")
+        .user_agent(concat!("sunrise-xray/", env!("CARGO_PKG_VERSION")))
         // 整体超时给宽一点，单次请求超时在 try_get_bytes 里另设
         .timeout(Duration::from_secs(300))
         .build()?;
 
-    let release: serde_json::Value = client
+    let release: Value = client
         .get(RELEASES_API)
         .timeout(Duration::from_secs(20))
         .send()
@@ -94,19 +96,28 @@ async fn download_latest_xray(target: &Path) -> Result<()> {
         .await
         .context("解析 GitHub release JSON 失败")?;
 
-    let download_url = release
-        .get("assets")
-        .and_then(|a| a.as_array())
-        .and_then(|arr| {
-            arr.iter().find(|a| {
-                a.get("name").and_then(|n| n.as_str()) == Some(asset_name)
-            })
-        })
-        .and_then(|a| a.get("browser_download_url").and_then(|u| u.as_str()))
-        .with_context(|| format!("release 中未找到资产: {asset_name}"))?
-        .to_string();
+    let zip_asset = find_asset(&release, asset_name)
+        .with_context(|| format!("release 中未找到资产: {asset_name}"))?;
+    let zip_url = asset_url(zip_asset)
+        .with_context(|| format!("资产 {asset_name} 缺少 browser_download_url"))?;
 
-    let bytes = download_with_mirrors(&client, &download_url).await?;
+    let expected_sha256 = resolve_expected_sha256(&client, &release, zip_asset, asset_name)
+        .await
+        .context("无法获取 xray 包的官方 SHA256")?;
+    println!("       期望 SHA256: {expected_sha256}");
+
+    let bytes = download_with_mirrors(&client, &zip_url, |b| {
+        anyhow::ensure!(b.len() >= 1024, "响应体过小 ({} bytes)，可能不是有效 zip", b.len());
+        Ok(())
+    })
+    .await?;
+
+    let actual_sha256 = sha256_hex(&bytes);
+    anyhow::ensure!(
+        actual_sha256.eq_ignore_ascii_case(&expected_sha256),
+        "下载的 xray 包 SHA256 不匹配，已拒绝写入磁盘\n  期望: {expected_sha256}\n  实际: {actual_sha256}"
+    );
+    println!("       SHA256 校验通过");
 
     if let Some(parent) = target.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -122,8 +133,99 @@ async fn download_latest_xray(target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// 按 GH_MIRRORS 顺序尝试下载；任何一个成功就返回。
-async fn download_with_mirrors(client: &reqwest::Client, github_url: &str) -> Result<Vec<u8>> {
+fn find_asset<'a>(release: &'a Value, name: &str) -> Option<&'a Value> {
+    release
+        .get("assets")?
+        .as_array()?
+        .iter()
+        .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(name))
+}
+
+fn asset_url(asset: &Value) -> Option<String> {
+    asset
+        .get("browser_download_url")
+        .and_then(|u| u.as_str())
+        .map(String::from)
+}
+
+/// GitHub release API 较新版本会在 asset 上提供 `digest` 字段，格式形如 `sha256:<hex>`。
+fn asset_inline_sha256(asset: &Value) -> Option<String> {
+    let s = asset.get("digest")?.as_str()?;
+    s.strip_prefix("sha256:").map(|h| h.trim().to_string())
+}
+
+/// 优先用 asset.digest；不可用则下 `<asset>.dgst` 文件解析 `SHA256=`。
+async fn resolve_expected_sha256(
+    client: &reqwest::Client,
+    release: &Value,
+    zip_asset: &Value,
+    asset_name: &str,
+) -> Result<String> {
+    if let Some(h) = asset_inline_sha256(zip_asset) {
+        if !h.is_empty() {
+            return Ok(h);
+        }
+    }
+
+    let dgst_name = format!("{asset_name}.dgst");
+    let dgst_asset = find_asset(release, &dgst_name).with_context(|| {
+        format!("既没有 asset.digest 字段，也找不到校验文件 {dgst_name}")
+    })?;
+    let dgst_url = asset_url(dgst_asset)
+        .with_context(|| format!("校验文件 {dgst_name} 缺少 browser_download_url"))?;
+
+    let dgst_bytes = download_with_mirrors(client, &dgst_url, |b| {
+        anyhow::ensure!(
+            (16..4096).contains(&b.len()),
+            "dgst 体积异常 ({} bytes)",
+            b.len()
+        );
+        let s = std::str::from_utf8(b).context("dgst 不是合法 UTF-8")?;
+        anyhow::ensure!(s.contains("SHA256="), "dgst 内容不含 SHA256= 字段");
+        Ok(())
+    })
+    .await?;
+
+    let dgst = std::str::from_utf8(&dgst_bytes).context("dgst 不是合法 UTF-8")?;
+    parse_sha256_from_dgst(dgst)
+}
+
+fn parse_sha256_from_dgst(dgst: &str) -> Result<String> {
+    for line in dgst.lines() {
+        let line = line.trim();
+        let rest = line
+            .strip_prefix("SHA256=")
+            .or_else(|| line.strip_prefix("SHA256:"));
+        if let Some(rest) = rest {
+            let hex = rest.trim().to_string();
+            anyhow::ensure!(hex.len() == 64, "SHA256 字段长度异常: {}", hex.len());
+            return Ok(hex);
+        }
+    }
+    anyhow::bail!("dgst 中找不到 SHA256 字段")
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    let digest = hasher.finalize();
+    let mut s = String::with_capacity(64);
+    for b in digest {
+        use std::fmt::Write;
+        let _ = write!(&mut s, "{b:02x}");
+    }
+    s
+}
+
+/// 按 GH_MIRRORS 顺序尝试下载；任何一个返回通过 validate 的字节就返回。
+async fn download_with_mirrors<F>(
+    client: &reqwest::Client,
+    github_url: &str,
+    validate: F,
+) -> Result<Vec<u8>>
+where
+    F: Fn(&[u8]) -> Result<()>,
+{
     let mut last_err: Option<anyhow::Error> = None;
 
     for prefix in GH_MIRRORS {
@@ -136,7 +238,13 @@ async fn download_with_mirrors(client: &reqwest::Client, github_url: &str) -> Re
         println!("下载({label}): {url}");
 
         match try_get_bytes(client, &url).await {
-            Ok(b) => return Ok(b),
+            Ok(b) => match validate(&b) {
+                Ok(()) => return Ok(b),
+                Err(e) => {
+                    println!("       响应内容校验失败: {e:#}");
+                    last_err = Some(e);
+                }
+            },
             Err(e) => {
                 println!("       失败: {e:#}");
                 last_err = Some(e);
@@ -159,10 +267,6 @@ async fn try_get_bytes(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
         .error_for_status()
         .context("非 2xx 响应")?;
     let bytes = resp.bytes().await.context("读取响应体失败")?;
-    // 镜像偶尔会返回一个 HTML 错误页或者很小的占位，做一下基本 sanity check
-    if bytes.len() < 1024 {
-        anyhow::bail!("响应体过小 ({} bytes)，可能不是有效 zip", bytes.len());
-    }
     Ok(bytes.to_vec())
 }
 
