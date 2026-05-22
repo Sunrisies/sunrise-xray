@@ -30,11 +30,13 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // 仅在以下变化时重跑：build.rs 自身改了 / 离线 zip 路径改了 / 目标平台改了
+    // 仅在以下变化时重跑：build.rs 自身改了 / 离线 zip 路径改了 / 目标平台改了 / token 改了
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SUNRISE_XRAY_ZIP");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_OS");
     println!("cargo:rerun-if-env-changed=CARGO_CFG_TARGET_ARCH");
+    println!("cargo:rerun-if-env-changed=GITHUB_TOKEN");
+    println!("cargo:rerun-if-env-changed=GH_TOKEN");
 
     let out_dir: PathBuf = env::var("OUT_DIR").context("OUT_DIR 未设置")?.into();
     let zip_dest = out_dir.join("xray.zip");
@@ -138,13 +140,30 @@ fn fetch_release_zip(agent: &ureq::Agent, asset_name: &str) -> Result<(Vec<u8>, 
 }
 
 fn get_json(agent: &ureq::Agent, url: &str) -> Result<serde_json::Value> {
-    let body = agent
-        .get(url)
+    let mut req = agent.get(url);
+    if let Some(token) = github_token() {
+        req = req.set("Authorization", &format!("Bearer {token}"));
+    }
+    let body = req
         .call()
         .with_context(|| format!("GET {url} 失败"))?
         .into_string()
         .context("读取 JSON 响应失败")?;
     serde_json::from_str(&body).context("解析 JSON 失败")
+}
+
+/// 读取 GitHub 认证 token：优先 GITHUB_TOKEN（GitHub Actions 默认注入），
+/// 其次 GH_TOKEN（gh CLI 习惯名）。带 token 时 api.github.com 速率限制
+/// 从匿名 60 次/小时 提升到 5000 次/小时，CI 上多并行 job 才不会被 403。
+fn github_token() -> Option<String> {
+    for name in &["GITHUB_TOKEN", "GH_TOKEN"] {
+        if let Ok(v) = env::var(name) {
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
 }
 
 fn download_with_mirrors<F>(

@@ -1,0 +1,8 @@
+# cross 在 Docker 容器里跑 cargo，宿主机环境变量默认不透传。
+# 这里把 build.rs 需要的 token 透传进去，避免 api.github.com 速率限制。
+[build.env]
+passthrough = [
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "SUNRISE_XRAY_ZIP",
+]
