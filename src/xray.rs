@@ -19,13 +19,21 @@ const GH_MIRRORS: &[&str] = &[
     "https://hub.gitmirror.com/",
 ];
 
-/// 解析当前 macOS 架构对应的 release 资产名
-fn macos_asset_name() -> Result<&'static str> {
-    match std::env::consts::ARCH {
-        "aarch64" => Ok("Xray-macos-arm64-v8a.zip"),
-        "x86_64" => Ok("Xray-macos-64.zip"),
-        other => anyhow::bail!("不支持的 macOS 架构: {other}"),
-    }
+/// 根据当前 OS + 架构返回对应的 Xray-core release 资产名。
+fn xray_asset_name() -> Result<&'static str> {
+    use std::env::consts::{ARCH, OS};
+    Ok(match (OS, ARCH) {
+        ("macos", "aarch64") => "Xray-macos-arm64-v8a.zip",
+        ("macos", "x86_64") => "Xray-macos-64.zip",
+        ("linux", "x86_64") => "Xray-linux-64.zip",
+        ("linux", "aarch64") => "Xray-linux-arm64-v8a.zip",
+        ("linux", "arm") => "Xray-linux-arm32-v7a.zip",
+        ("linux", "x86") => "Xray-linux-32.zip",
+        ("windows", "x86_64") => "Xray-windows-64.zip",
+        ("windows", "aarch64") => "Xray-windows-arm64-v8a.zip",
+        ("windows", "x86") => "Xray-windows-32.zip",
+        (os, arch) => anyhow::bail!("不支持的平台: {os}/{arch}"),
+    })
 }
 
 /// 优先使用 XRAY_PATH 环境变量 / which xray / 本地缓存；都没有则从 GitHub 下载。
@@ -67,7 +75,7 @@ async fn which_xray() -> Option<PathBuf> {
 }
 
 async fn download_latest_xray(target: &Path) -> Result<()> {
-    let asset_name = macos_asset_name()?;
+    let asset_name = xray_asset_name()?;
     let client = reqwest::Client::builder()
         .user_agent("sunrise-xray/0.1")
         // 整体超时给宽一点，单次请求超时在 try_get_bytes 里另设
@@ -169,7 +177,7 @@ fn extract_xray_bin(zip_bytes: &[u8], target: &Path) -> Result<()> {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
         match name.as_str() {
-            "xray" => {
+            "xray" | "xray.exe" => {
                 let mut out = std::fs::File::create(target)
                     .with_context(|| format!("创建文件失败: {}", target.display()))?;
                 std::io::copy(&mut entry, &mut out)?;

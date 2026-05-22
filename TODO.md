@@ -6,7 +6,7 @@
 
 ## P0 — 阻塞性（功能 / 安全）
 
-- [ ] **#1 只能在 macOS 跑** — `macos_asset_name()` 只返回 macOS 资产名，其他系统 `bail!`。需要按 OS+ARCH 返回对应资产名（Linux x86_64 / arm64 / arm32、Windows x86_64）
+- [x] **#1 只能在 macOS 跑** — `macos_asset_name()` 只返回 macOS 资产名，其他系统 `bail!`。需要按 OS+ARCH 返回对应资产名（Linux x86_64 / arm64 / arm32、Windows x86_64）
   - 位置：`src/xray.rs:23-29`
 - [ ] **#2 下载的 xray 二进制无校验** — 从 5 个第三方镜像下任意字节当可执行文件运行，没有 SHA256/签名校验，镜像被投毒就完蛋。release JSON 里有官方 sha256，可比对
   - 位置：`src/xray.rs:144-159`
