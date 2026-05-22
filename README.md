@@ -15,7 +15,34 @@
 
 可通过 `--socks-port` / `--http-port` 或 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT` 环境变量修改（CLI 优先）。
 
-## 快速开始
+## 一键安装（预编译二进制）
+
+不想编译就用这条。脚本会自动探测平台、下载对应产物、SHA256 校验、装到 `~/.local/bin/sunrise-xray`：
+
+```bash
+# 境外 / 有梯子
+curl -fsSL https://raw.githubusercontent.com/Sunrisies/sunrise-xray/main/scripts/install.sh | bash
+
+# 大陆（七牛 CDN 镜像，待 CDN 域名配置后填入下方 <your-cdn>）
+curl -fsSL https://<your-cdn>/sunrise-xray/install.sh | bash
+```
+
+常用参数（写在 `bash` 之后用 `-s --` 分隔）：
+
+```bash
+# 装特定版本
+curl -fsSL https://.../install.sh | bash -s -- --version v0.1.0
+
+# 改安装目录
+curl -fsSL https://.../install.sh | bash -s -- --dir /usr/local/bin
+
+# 临时覆盖镜像基址
+curl -fsSL https://.../install.sh | bash -s -- --mirror https://my-mirror.example.com
+```
+
+支持平台：macOS x86_64 / arm64，Linux x86_64 / aarch64。Windows 暂时只提供 zip 手动解压。
+
+## 快速开始（从源码编译）
 
 ```bash
 git clone https://github.com/Sunrisies/sunrise-xray.git

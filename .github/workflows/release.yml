@@ -144,3 +144,107 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  qiniu_upload:
+    name: Mirror to Qiniu
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check Qiniu secrets
+        id: gate
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+        run: |
+          if [ -z "$QINIU_ACCESS_KEY" ] || [ -z "$QINIU_SECRET_KEY" ] || [ -z "$QINIU_BUCKET" ]; then
+            echo "::warning::Qiniu secrets 未配置（QINIU_ACCESS_KEY / QINIU_SECRET_KEY / QINIU_BUCKET），跳过 Qiniu 上传。"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all artifacts
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Install qshell
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          QSHELL_VER="v2.16.0"
+          wget -q "https://devtools.qiniu.com/qshell-${QSHELL_VER}-linux-amd64.tar.gz" -O qshell.tar.gz
+          tar -xzf qshell.tar.gz
+          chmod +x qshell-*-linux-amd64 2>/dev/null || true
+          chmod +x qshell 2>/dev/null || true
+          # 不同版本压缩包里的二进制文件名不同，统一找一下
+          BIN=$(find . -maxdepth 1 -type f -name 'qshell*' ! -name '*.tar.gz' | head -1)
+          sudo mv "$BIN" /usr/local/bin/qshell
+          qshell --version
+
+      - name: Configure qshell account
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          QINIU_ACCESS_KEY: ${{ secrets.QINIU_ACCESS_KEY }}
+          QINIU_SECRET_KEY: ${{ secrets.QINIU_SECRET_KEY }}
+        run: |
+          qshell account --overwrite "$QINIU_ACCESS_KEY" "$QINIU_SECRET_KEY" sunrise-ci
+
+      - name: Upload artifacts to Qiniu
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          for f in artifacts/*.tar.gz artifacts/*.zip artifacts/*.sha256; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f")
+            key="sunrise-xray/${TAG}/${name}"
+            echo "→ ${f}  ⇒  qiniu://${QINIU_BUCKET}/${key}"
+            qshell fput --overwrite "$QINIU_BUCKET" "$key" "$f"
+          done
+
+      - name: Publish install.sh + latest.txt
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_CDN_DOMAIN: ${{ secrets.QINIU_CDN_DOMAIN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          # 把 CDN 域名注入 install.sh 的 DEFAULT_MIRROR_BASE，这样从 Qiniu 拿到
+          # 的脚本会自动把 Qiniu 当作首选下载源。空 secret 则退回原文（不动）。
+          if [ -n "${QINIU_CDN_DOMAIN:-}" ]; then
+            domain="${QINIU_CDN_DOMAIN%/}"   # 去掉可能的末尾斜杠
+            sed "s|^DEFAULT_MIRROR_BASE=\"\"|DEFAULT_MIRROR_BASE=\"${domain}\"|" \
+              scripts/install.sh > install.sh.rendered
+            echo "已注入 DEFAULT_MIRROR_BASE=${domain}"
+          else
+            cp scripts/install.sh install.sh.rendered
+            echo "::warning::QINIU_CDN_DOMAIN 未设置，install.sh 不会包含 Qiniu 作为镜像"
+          fi
+          # 当前 tag 写入 latest.txt，方便 install.sh 用一次 HTTP GET 拿版本
+          echo "$TAG" > latest.txt
+          qshell fput --overwrite "$QINIU_BUCKET" "sunrise-xray/latest.txt" latest.txt
+          # install.sh 归档一份带 tag，再覆盖到 sunrise-xray/install.sh（最新）
+          qshell fput --overwrite "$QINIU_BUCKET" "sunrise-xray/${TAG}/install.sh" install.sh.rendered
+          qshell fput --overwrite "$QINIU_BUCKET" "sunrise-xray/install.sh" install.sh.rendered
+
+      - name: Summary
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          QINIU_CDN_DOMAIN: ${{ secrets.QINIU_CDN_DOMAIN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          BASE="${QINIU_CDN_DOMAIN:-<your-cdn-domain>}"
+          echo "## Qiniu 镜像已上传" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- install.sh：\`${BASE}/sunrise-xray/install.sh\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 当前最新版本指针：\`${BASE}/sunrise-xray/latest.txt\` → \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- 产物目录：\`${BASE}/sunrise-xray/${TAG}/\`" >> "$GITHUB_STEP_SUMMARY"
