@@ -91,12 +91,35 @@ launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy
 
 ### 重新编译并部署
 
+部署有两条路径，按场景选：
+
+**方式一（推荐，无需 Rust 工具链）：用 install.sh 安装预编译版本**
+
+```bash
+# 装到 ~/.local/bin/sunrise-xray
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash
+
+# 或装到系统级目录（需要 sudo）
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | sudo bash -s -- --dir /usr/local/bin
+
+# 替换 launchd 用的那个二进制，并重启
+cp ~/.local/bin/sunrise-xray ~/.local/bin/sunrise-xray.bak  # 备份
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash
+launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy
+```
+
+脚本会自动按「Qiniu CDN → ghproxy → 直连 GitHub」镜像顺序下载，带 SHA256 校验，无需 VPN 也可以在大陆直接装。
+
+**方式二：从源码编译**
+
 ```bash
 cd ~/Desktop/rust/sunrise-xray
 cargo build --release
 cp target/release/sunrise-xray ~/.local/bin/sunrise-xray
 launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy
 ```
+
+源码编译适合：本地有改动 / 调试 / 想要带特定 build flag 的版本。
 
 ### 切换订阅地址
 
@@ -300,6 +323,7 @@ Build deps：`ureq`, `sha2`, `serde_json`, `anyhow`。
 | 临时关代理 | `proxy off` |
 | 重新开代理 | `proxy on` |
 | 重启守护进程 | `launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy` |
-| 编译 + 部署 | `cd ~/Desktop/rust/sunrise-xray && cargo build --release && cp target/release/sunrise-xray ~/.local/bin/ && launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy` |
+| 升级到最新版（脚本） | `curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh \| bash && launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy` |
+| 编译 + 部署（开发用） | `cd ~/Desktop/rust/sunrise-xray && cargo build --release && cp target/release/sunrise-xray ~/.local/bin/ && launchctl kickstart -k gui/$(id -u)/com.sunrise-xray.proxy` |
 | 看 launchd 任务详情 | `launchctl print gui/$(id -u)/com.sunrise-xray.proxy` |
 | 临时单条命令不走代理 | `curl --noproxy '*' <url>` |

@@ -15,32 +15,59 @@
 
 可通过 `--socks-port` / `--http-port` 或 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT` 环境变量修改（CLI 优先）。
 
-## 一键安装（预编译二进制）
+## 一键安装（推荐）
 
-不想编译就用这条。脚本会自动探测平台、下载对应产物、SHA256 校验、装到 `~/.local/bin/sunrise-xray`：
+最简单的方式，全平台一条命令。脚本会自动探测系统/架构、按「Qiniu CDN → ghproxy → 直连 GitHub」镜像优先级下载、SHA256 校验、装到 `~/.local/bin/sunrise-xray`：
 
 ```bash
-# 境外 / 有梯子
-curl -fsSL https://raw.githubusercontent.com/Sunrisies/sunrise-xray/main/scripts/install.sh | bash
-
-# 大陆（七牛 CDN 镜像，待 CDN 域名配置后填入下方 <your-cdn>）
-curl -fsSL https://<your-cdn>/sunrise-xray/install.sh | bash
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash
 ```
 
-常用参数（写在 `bash` 之后用 `-s --` 分隔）：
+支持平台：
+
+| 平台 | 架构 |
+|---|---|
+| macOS | x86_64（Intel）、arm64（Apple Silicon） |
+| Linux | x86_64、aarch64（musl 静态链接，发行版无关） |
+| Windows | 暂时只提供 zip 手动解压，见下方「手动下载」 |
+
+### 常用参数
+
+参数写在 `bash` 之后，用 `-s --` 分隔：
 
 ```bash
 # 装特定版本
-curl -fsSL https://.../install.sh | bash -s -- --version v0.1.0
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --version v0.1.2
 
-# 改安装目录
-curl -fsSL https://.../install.sh | bash -s -- --dir /usr/local/bin
+# 改安装目录（例如系统级）
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --dir /usr/local/bin
 
-# 临时覆盖镜像基址
-curl -fsSL https://.../install.sh | bash -s -- --mirror https://my-mirror.example.com
+# 临时指定镜像基址（自建镜像或调试用）
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --mirror https://my-mirror.example.com
 ```
 
-支持平台：macOS x86_64 / arm64，Linux x86_64 / aarch64。Windows 暂时只提供 zip 手动解压。
+### 镜像策略
+
+`install.sh` 按以下顺序尝试，第一个能下载且 SHA256 校验通过的胜出：
+
+1. **Qiniu CDN**：`https://cdn.sunrise1024.top/sunrise-xray/...`（大陆访问最快）
+2. **GitHub 加速**：`https://ghproxy.net/` 和 `https://gh-proxy.com/` 前缀
+3. **直连 GitHub Release**
+
+境外用户也能直接用上面那条命令——Qiniu CDN 在全球都有可达性，慢就慢一点；如果完全不通就 fallback 到 GitHub。或者直接从 GitHub raw 拉脚本：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Sunrisies/sunrise-xray/main/scripts/install.sh | bash
+```
+
+### 手动下载
+
+预编译产物挂在两个地方：
+
+- GitHub Releases：https://github.com/Sunrisies/sunrise-xray/releases
+- Qiniu CDN：`https://cdn.sunrise1024.top/sunrise-xray/<tag>/`（`latest.txt` 是当前版本号指针）
+
+每个产物都有同名 `.sha256` 校验文件。
 
 ## 快速开始（从源码编译）
 
@@ -102,7 +129,7 @@ src/
 `.github/workflows/` 下有两条流水线：
 
 - **ci.yml** — push 到 main 或 PR 时跑 `cargo check` + `cargo test`
-- **release.yml** — 推 `v*` tag 时自动多平台交叉编译并发布到 GitHub Release
+- **release.yml** — 推 `v*` tag 时自动多平台交叉编译，并发布到 GitHub Release + 镜像到 Qiniu CDN
 
 发新版本：
 
@@ -115,7 +142,14 @@ git tag v0.2.0
 git push origin main v0.2.0
 ```
 
-Action 跑完会在仓库的 Releases 页面挂上 5 个产物（每个都带 `.sha256` 校验文件）：
+Action 跑完后两个地方都有产物：
+
+| 位置 | 路径 |
+|---|---|
+| GitHub Releases | https://github.com/Sunrisies/sunrise-xray/releases/tag/vX.Y.Z |
+| Qiniu CDN | `https://cdn.sunrise1024.top/sunrise-xray/vX.Y.Z/` |
+
+每个版本都打包成 5 个平台产物（每个都带 `.sha256` 校验文件）：
 
 | 文件 | 适用平台 |
 |---|---|
@@ -125,7 +159,12 @@ Action 跑完会在仓库的 Releases 页面挂上 5 个产物（每个都带 `.
 | `sunrise-xray-vX.Y.Z-aarch64-unknown-linux-musl.tar.gz` | ARM64 Linux（服务器 / 树莓派 4+） |
 | `sunrise-xray-vX.Y.Z-x86_64-pc-windows-msvc.zip` | 64 位 Windows |
 
-也支持在 Actions 页面手动触发（workflow_dispatch）做 dry-run，不会创建 Release。
+Qiniu 镜像额外维护：
+
+- `sunrise-xray/install.sh` — 安装脚本（CDN 域名通过 CI sed 注入 `DEFAULT_MIRROR_BASE`）
+- `sunrise-xray/latest.txt` — 当前最新版本号指针（`install.sh` 不带 `--version` 时 GET 这个解析 latest）
+
+也支持在 Actions 页面手动触发（workflow_dispatch）做 dry-run，不会创建 Release 或上传 Qiniu。
 
 预发布版本（tag 含 `-`，如 `v0.2.0-rc1`）会自动标记为 prerelease。
 
