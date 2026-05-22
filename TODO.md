@@ -50,7 +50,7 @@
   - 位置：`Cargo.toml`
 - [x] **#19 没有 LICENSE 文件** — README 写了 MIT 但仓库根目录没 `LICENSE` 文件
   - 位置：仓库根
-- [ ] **#20 `user_agent` 写死 "0.1"** — 升级版本号 user-agent 还停留在旧值，应用 `env!("CARGO_PKG_VERSION")`
+- [x] **#20 `user_agent` 写死 "0.1"** — 升级版本号 user-agent 还停留在旧值，应用 `env!("CARGO_PKG_VERSION")`
   - 位置：`src/xray.rs:72`、`src/fetch.rs:8`
 - [ ] **#21 没有 CI** — 没 GitHub Actions，跨平台编译没人验证
   - 位置：仓库根

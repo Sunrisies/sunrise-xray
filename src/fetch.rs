@@ -1,11 +1,11 @@
+use crate::util;
 use anyhow::{Context, Result};
-use base64::{engine::general_purpose, Engine as _};
 use std::time::Duration;
 
-/// 拉取订阅并返回解码后的文本（按行排列的 vless:// / hysteria2:// 等 URI）。
+/// 拉取订阅并返回解码后的文本（按行排列的 vless:// / trojan:// 等 URI）。
 pub async fn fetch_subscription(url: &str) -> Result<String> {
     let client = reqwest::Client::builder()
-        .user_agent("sunrise-xray/0.1")
+        .user_agent(concat!("sunrise-xray/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(30))
         .build()
         .context("构造 HTTP 客户端失败")?;
@@ -25,19 +25,6 @@ pub async fn fetch_subscription(url: &str) -> Result<String> {
     if body.contains("://") {
         Ok(body)
     } else {
-        decode_base64_loose(&body).context("订阅 base64 解码失败")
+        util::decode_base64_loose(&body).context("订阅 base64 解码失败")
     }
-}
-
-fn decode_base64_loose(s: &str) -> Result<String> {
-    let mut cleaned: String = s.chars().filter(|c| !c.is_whitespace()).collect();
-    // URL-safe 兼容
-    cleaned = cleaned.replace('-', "+").replace('_', "/");
-    while cleaned.len() % 4 != 0 {
-        cleaned.push('=');
-    }
-    let bytes = general_purpose::STANDARD
-        .decode(cleaned.as_bytes())
-        .context("base64 decode 失败")?;
-    String::from_utf8(bytes).context("base64 解码后的字节不是合法 UTF-8")
 }

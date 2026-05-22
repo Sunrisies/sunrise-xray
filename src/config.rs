@@ -1,3 +1,4 @@
+use crate::util;
 use anyhow::{Context, Result};
 use percent_encoding::percent_decode_str;
 use serde_json::{json, Value};
@@ -86,6 +87,8 @@ pub fn parse_subscription(text: &str) -> Vec<ProxyNode> {
 
         let parsed = match scheme.as_str() {
             "vless" => parse_vless_uri(line),
+            "trojan" => parse_trojan_uri(line),
+            "ss" => parse_ss_uri(line),
             _ => {
                 *skipped_protocol.entry(scheme).or_insert(0) += 1;
                 continue;
@@ -137,13 +140,6 @@ fn parse_vless_uri(line: &str) -> Result<ProxyNode> {
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
 
-    let network = q.get("type").map(String::as_str).unwrap_or("tcp");
-    anyhow::ensure!(
-        network == "tcp",
-        "暂不支持 type={network} 的 VLESS 流传输（仅支持 tcp）"
-    );
-
-    let security = q.get("security").map(String::as_str).unwrap_or("none");
     let flow = q.get("flow").cloned().unwrap_or_default();
 
     let mut user = json!({ "id": id, "encryption": "none" });
@@ -151,36 +147,7 @@ fn parse_vless_uri(line: &str) -> Result<ProxyNode> {
         user["flow"] = Value::String(flow);
     }
 
-    let mut stream = json!({
-        "network": "tcp",
-        "security": security,
-    });
-
-    match security {
-        "reality" => {
-            let pbk = q
-                .get("pbk")
-                .filter(|s| !s.is_empty())
-                .context("REALITY 节点缺少 publicKey (pbk)")?;
-            let sni = q.get("sni").cloned().unwrap_or_default();
-            let sid = q.get("sid").cloned().unwrap_or_default();
-            let fp = q.get("fp").cloned().unwrap_or_else(|| "chrome".into());
-            stream["realitySettings"] = json!({
-                "serverName": sni,
-                "publicKey": pbk,
-                "shortId": sid,
-                "fingerprint": fp,
-                "show": false,
-            });
-        }
-        "tls" => {
-            stream["tlsSettings"] = build_tls_settings(&q, &address);
-        }
-        "none" => {
-            // 没有额外的安全层设置
-        }
-        other => anyhow::bail!("不支持的 VLESS security: {other}"),
-    }
+    let stream = build_stream_settings(&q, &address, "none")?;
 
     let name = fragment_name(&url);
     let outbound = json!({
@@ -203,6 +170,158 @@ fn parse_vless_uri(line: &str) -> Result<ProxyNode> {
         port,
         outbound,
     })
+}
+
+fn parse_trojan_uri(line: &str) -> Result<ProxyNode> {
+    let url = Url::parse(line).context("trojan URL 解析失败")?;
+
+    let password = percent_decode_str(url.username())
+        .decode_utf8()
+        .context("trojan password 不是合法 UTF-8")?
+        .to_string();
+    anyhow::ensure!(!password.is_empty(), "trojan URI 缺少 password");
+
+    let address = url.host_str().context("trojan URI 缺少 host")?.to_string();
+    let port = url.port().context("trojan URI 缺少 port")?;
+
+    let q: HashMap<String, String> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+
+    // trojan 默认就是 tls，URI 里可以省略 security 参数
+    let stream = build_stream_settings(&q, &address, "tls")?;
+
+    let name = fragment_name(&url);
+    let outbound = json!({
+        "tag": "proxy",
+        "protocol": "trojan",
+        "settings": {
+            "servers": [{
+                "address": address,
+                "port": port,
+                "password": password,
+            }],
+        },
+        "streamSettings": stream,
+    });
+
+    Ok(ProxyNode {
+        name,
+        protocol: "trojan",
+        address,
+        port,
+        outbound,
+    })
+}
+
+fn parse_ss_uri(line: &str) -> Result<ProxyNode> {
+    let url = Url::parse(line).context("ss URL 解析失败")?;
+
+    let userinfo = url.username();
+    anyhow::ensure!(
+        !userinfo.is_empty(),
+        "SS URI 缺少 userinfo（暂不支持把 userinfo+host 整段 base64 的老格式）"
+    );
+
+    let decoded = util::decode_base64_loose(userinfo)
+        .context("SS userinfo base64 解码失败")?;
+    let (method, password) = decoded
+        .split_once(':')
+        .context("SS userinfo 解码后应为 method:password 格式")?;
+    anyhow::ensure!(!method.is_empty(), "SS method 为空");
+    anyhow::ensure!(!password.is_empty(), "SS password 为空");
+
+    let address = url.host_str().context("SS URI 缺少 host")?.to_string();
+    let port = url.port().context("SS URI 缺少 port")?;
+
+    let q: HashMap<String, String> = url
+        .query_pairs()
+        .map(|(k, v)| (k.into_owned(), v.into_owned()))
+        .collect();
+
+    // SIP003 插件（obfs / v2ray-plugin / shadow-tls）在 xray 里支持有限，先拒绝
+    if let Some(plugin) = q.get("plugin") {
+        anyhow::bail!("暂不支持带 plugin 的 SS 节点 (plugin={plugin})");
+    }
+
+    let name = fragment_name(&url);
+    let outbound = json!({
+        "tag": "proxy",
+        "protocol": "shadowsocks",
+        "settings": {
+            "servers": [{
+                "address": address,
+                "port": port,
+                "method": method,
+                "password": password,
+            }],
+        },
+    });
+
+    Ok(ProxyNode {
+        name,
+        protocol: "ss",
+        address,
+        port,
+        outbound,
+    })
+}
+
+/// 公共：把 URI 的 type / security 字段翻译成 xray streamSettings。
+/// 目前只支持 type=tcp；遇到 ws/grpc/h2/kcp/quic 等会 bail（被 parse_subscription 跳过）。
+fn build_stream_settings(
+    q: &HashMap<String, String>,
+    address: &str,
+    default_security: &str,
+) -> Result<Value> {
+    let network = q.get("type").map(String::as_str).unwrap_or("tcp");
+    anyhow::ensure!(
+        network == "tcp",
+        "暂不支持 type={network} 的流传输（仅支持 tcp）"
+    );
+
+    let security_raw = q.get("security").map(String::as_str).unwrap_or("");
+    let security = if security_raw.is_empty() {
+        default_security
+    } else {
+        security_raw
+    };
+
+    let mut stream = json!({
+        "network": "tcp",
+        "security": security,
+    });
+
+    match security {
+        "reality" => {
+            stream["realitySettings"] = build_reality_settings(q)?;
+        }
+        "tls" => {
+            stream["tlsSettings"] = build_tls_settings(q, address);
+        }
+        "none" => {}
+        other => anyhow::bail!("不支持的 security: {other}"),
+    }
+
+    Ok(stream)
+}
+
+fn build_reality_settings(q: &HashMap<String, String>) -> Result<Value> {
+    let pbk = q
+        .get("pbk")
+        .filter(|s| !s.is_empty())
+        .context("REALITY 节点缺少 publicKey (pbk)")?;
+    let sni = q.get("sni").cloned().unwrap_or_default();
+    let sid = q.get("sid").cloned().unwrap_or_default();
+    let fp = q.get("fp").cloned().unwrap_or_else(|| "chrome".into());
+    Ok(json!({
+        "serverName": sni,
+        "publicKey": pbk,
+        "shortId": sid,
+        "fingerprint": fp,
+        "show": false,
+    }))
 }
 
 fn build_tls_settings(q: &HashMap<String, String>, address: &str) -> Value {
@@ -392,7 +511,7 @@ mod tests {
 
     #[test]
     fn parse_subscription_skips_unsupported_scheme() {
-        let text = "vmess://eyJ2IjoiMiJ9\nss://YWVzLTI1Ni1nY206cGFzcw@example.com:8388";
+        let text = "vmess://eyJ2IjoiMiJ9\nhysteria2://pwd@example.com:443#H2";
         let nodes = parse_subscription(text);
         assert_eq!(nodes.len(), 0);
     }
@@ -408,5 +527,81 @@ mod tests {
         assert_eq!(nodes.len(), 2);
         assert_eq!(nodes[0].name, "A");
         assert_eq!(nodes[1].name, "B");
+    }
+
+    #[test]
+    fn parse_subscription_trojan_default_tls() {
+        let text = "trojan://my-password@example.com:443?sni=cdn.foo.com#TJ-01";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].protocol, "trojan");
+        assert_eq!(nodes[0].name, "TJ-01");
+        assert_eq!(nodes[0].outbound["settings"]["servers"][0]["password"], "my-password");
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["security"], "tls");
+        assert_eq!(stream["tlsSettings"]["serverName"], "cdn.foo.com");
+    }
+
+    #[test]
+    fn parse_subscription_trojan_percent_decoded_password() {
+        // password "p@ss:w/d" encoded as "p%40ss%3Aw%2Fd"
+        let text = "trojan://p%40ss%3Aw%2Fd@example.com:443#TJ-02";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].outbound["settings"]["servers"][0]["password"], "p@ss:w/d");
+    }
+
+    #[test]
+    fn parse_subscription_trojan_skips_ws() {
+        let text = "trojan://pwd@example.com:443?type=ws&security=tls&sni=foo.com#WS";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_ss_sip002() {
+        // base64("aes-256-gcm:my-pass") = "YWVzLTI1Ni1nY206bXktcGFzcw"
+        let text = "ss://YWVzLTI1Ni1nY206bXktcGFzcw@example.com:8388#SS-01";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].protocol, "ss");
+        let server = &nodes[0].outbound["settings"]["servers"][0];
+        assert_eq!(server["method"], "aes-256-gcm");
+        assert_eq!(server["password"], "my-pass");
+        assert_eq!(server["port"], 8388);
+    }
+
+    #[test]
+    fn parse_subscription_ss_url_safe_base64() {
+        // SS userinfo using URL-safe base64 ("-" / "_") + missing padding
+        // base64("chacha20-ietf-poly1305:abc?") standard = "Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTphYmM/"
+        // URL-safe variant: replace "/" with "_" and drop padding
+        let text = "ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTphYmM_@example.com:8388#URLSafe";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let server = &nodes[0].outbound["settings"]["servers"][0];
+        assert_eq!(server["method"], "chacha20-ietf-poly1305");
+        assert_eq!(server["password"], "abc?");
+    }
+
+    #[test]
+    fn parse_subscription_ss_with_plugin_is_skipped() {
+        let text = "ss://YWVzLTI1Ni1nY206cHc@example.com:8388?plugin=obfs-local#WithPlugin";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_mixed_protocols() {
+        let text = "\
+            vless://uuid@a.com:443?security=reality&pbk=xyz#V\n\
+            trojan://pwd@b.com:443#T\n\
+            ss://YWVzLTI1Ni1nY206cHc@c.com:8388#S\n\
+            vmess://eyJ2IjoiMiJ9#VM\n";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 3);
+        assert_eq!(nodes[0].protocol, "vless");
+        assert_eq!(nodes[1].protocol, "trojan");
+        assert_eq!(nodes[2].protocol, "ss");
     }
 }

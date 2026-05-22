@@ -1,6 +1,7 @@
 mod config;
 mod fetch;
 mod paths;
+mod util;
 mod xray;
 
 use anyhow::{anyhow, Context, Result};
