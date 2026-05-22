@@ -10,10 +10,9 @@
   - 位置：`src/xray.rs:23-29`
 - [x] **#2 下载的 xray 二进制无校验** — 从 5 个第三方镜像下任意字节当可执行文件运行，没有 SHA256/签名校验，镜像被投毒就完蛋。release JSON 里有官方 sha256，可比对
   - 位置：`src/xray.rs:144-159`
-- [x] **#3 节点固定挑索引 0** — 第一个节点挂了整个服务废。需要环境变量 / CLI 参数 / 自动测速
-  - 位置：`src/config.rs:48`
-- [ ] **#4 只识别 VLESS+REALITY** — 订阅里的 vmess / trojan / ss / hysteria2 全被丢弃
+- [x] **#4 只识别 VLESS+REALITY** — 订阅里的 vmess / trojan / ss / hysteria2 全被丢弃
   - 位置：`src/config.rs:22-32`
+  - 备注：VLESS（REALITY/TLS/none）+ Trojan + VMess + Shadowsocks 已支持；Hysteria2 是 xray 不原生支持的协议，需要额外集成 sing-box 才能跑，独立议题
 
 ## P1 — 健壮性 / 体验
 

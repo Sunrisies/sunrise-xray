@@ -89,6 +89,7 @@ pub fn parse_subscription(text: &str) -> Vec<ProxyNode> {
             "vless" => parse_vless_uri(line),
             "trojan" => parse_trojan_uri(line),
             "ss" => parse_ss_uri(line),
+            "vmess" => parse_vmess_uri(line),
             _ => {
                 *skipped_protocol.entry(scheme).or_insert(0) += 1;
                 continue;
@@ -266,6 +267,117 @@ fn parse_ss_uri(line: &str) -> Result<ProxyNode> {
         port,
         outbound,
     })
+}
+
+fn parse_vmess_uri(line: &str) -> Result<ProxyNode> {
+    let after_scheme = line
+        .strip_prefix("vmess://")
+        .context("不是 vmess:// URI")?;
+
+    // 标准的 v2rayN VMess URI 是纯 base64，但有些客户端会在末尾带 #remark；做下兼容
+    let (b64, frag) = match after_scheme.split_once('#') {
+        Some((b, f)) => (b, f),
+        None => (after_scheme, ""),
+    };
+
+    let json_text = util::decode_base64_loose(b64)
+        .context("VMess URI base64 解码失败")?;
+    let v: Value = serde_json::from_str(&json_text)
+        .context("VMess URI base64 解码后不是合法 JSON")?;
+
+    let address = field_str(&v, "add").context("VMess 缺少 add 字段")?;
+    let port = field_u16(&v, "port").context("VMess port 字段非法或缺失")?;
+    let id = field_str(&v, "id").context("VMess 缺少 id 字段")?;
+    let alter_id = field_u32(&v, "aid").unwrap_or(0);
+    let scy = field_str(&v, "scy").unwrap_or_else(|| "auto".into());
+
+    let q = vmess_to_uri_query(&v);
+    let stream = build_stream_settings(&q, &address, "none")?;
+
+    let name = if !frag.is_empty() {
+        percent_decode_str(frag).decode_utf8_lossy().to_string()
+    } else {
+        field_str(&v, "ps").unwrap_or_else(|| format!("{}:{}", address, port))
+    };
+
+    let outbound = json!({
+        "tag": "proxy",
+        "protocol": "vmess",
+        "settings": {
+            "vnext": [{
+                "address": address,
+                "port": port,
+                "users": [{
+                    "id": id,
+                    "alterId": alter_id,
+                    "security": scy,
+                }],
+            }],
+        },
+        "streamSettings": stream,
+    });
+
+    Ok(ProxyNode {
+        name,
+        protocol: "vmess",
+        address,
+        port,
+        outbound,
+    })
+}
+
+/// 把 VMess JSON 的字段翻译成 URI 风格的 `HashMap`，喂给 `build_stream_settings`。
+fn vmess_to_uri_query(v: &Value) -> HashMap<String, String> {
+    let mut q = HashMap::new();
+    // (vmess_json_key, uri_query_key)
+    let mapping = [
+        ("net", "type"),
+        ("tls", "security"),
+        ("sni", "sni"),
+        ("alpn", "alpn"),
+        ("fp", "fp"),
+        ("pbk", "pbk"),
+        ("sid", "sid"),
+        ("host", "host"),
+        ("path", "path"),
+    ];
+    for (vmess_key, uri_key) in &mapping {
+        if let Some(s) = v.get(*vmess_key).and_then(|x| x.as_str()) {
+            if !s.is_empty() {
+                q.insert((*uri_key).to_string(), s.to_string());
+            }
+        }
+    }
+    q
+}
+
+fn field_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key).and_then(|x| match x {
+        Value::String(s) if !s.is_empty() => Some(s.clone()),
+        _ => None,
+    })
+}
+
+fn field_u16(v: &Value, key: &str) -> Option<u16> {
+    let raw = v.get(key)?;
+    if let Some(n) = raw.as_u64() {
+        return u16::try_from(n).ok();
+    }
+    if let Some(s) = raw.as_str() {
+        return s.parse().ok();
+    }
+    None
+}
+
+fn field_u32(v: &Value, key: &str) -> Option<u32> {
+    let raw = v.get(key)?;
+    if let Some(n) = raw.as_u64() {
+        return u32::try_from(n).ok();
+    }
+    if let Some(s) = raw.as_str() {
+        return s.parse().ok();
+    }
+    None
 }
 
 /// 公共：把 URI 的 type / security 字段翻译成 xray streamSettings。
@@ -511,7 +623,7 @@ mod tests {
 
     #[test]
     fn parse_subscription_skips_unsupported_scheme() {
-        let text = "vmess://eyJ2IjoiMiJ9\nhysteria2://pwd@example.com:443#H2";
+        let text = "hysteria2://pwd@example.com:443#H2\nsocks5://u:p@example.com:1080#X";
         let nodes = parse_subscription(text);
         assert_eq!(nodes.len(), 0);
     }
@@ -593,15 +705,94 @@ mod tests {
 
     #[test]
     fn parse_subscription_mixed_protocols() {
-        let text = "\
-            vless://uuid@a.com:443?security=reality&pbk=xyz#V\n\
-            trojan://pwd@b.com:443#T\n\
-            ss://YWVzLTI1Ni1nY206cHc@c.com:8388#S\n\
-            vmess://eyJ2IjoiMiJ9#VM\n";
-        let nodes = parse_subscription(text);
-        assert_eq!(nodes.len(), 3);
+        let vmess_json = r#"{"v":"2","ps":"VM","add":"vm.example.com","port":443,"id":"uuid-v","aid":0,"scy":"auto","net":"tcp","tls":"tls","sni":"vm.example.com"}"#;
+        let text = format!(
+            "vless://uuid@a.com:443?security=reality&pbk=xyz#V\n\
+             trojan://pwd@b.com:443#T\n\
+             ss://YWVzLTI1Ni1nY206cHc@c.com:8388#S\n\
+             {}\n",
+            vmess_uri(vmess_json)
+        );
+        let nodes = parse_subscription(&text);
+        assert_eq!(nodes.len(), 4);
         assert_eq!(nodes[0].protocol, "vless");
         assert_eq!(nodes[1].protocol, "trojan");
         assert_eq!(nodes[2].protocol, "ss");
+        assert_eq!(nodes[3].protocol, "vmess");
+    }
+
+    fn vmess_uri(json: &str) -> String {
+        use base64::{engine::general_purpose, Engine as _};
+        format!("vmess://{}", general_purpose::STANDARD.encode(json))
+    }
+
+    #[test]
+    fn parse_subscription_vmess_tls() {
+        let json = r#"{"v":"2","ps":"VM-01","add":"vm.example.com","port":443,"id":"uuid-here","aid":0,"scy":"auto","net":"tcp","tls":"tls","sni":"vm.example.com","alpn":"h2,http/1.1","fp":"chrome"}"#;
+        let nodes = parse_subscription(&vmess_uri(json));
+        assert_eq!(nodes.len(), 1);
+        let n = &nodes[0];
+        assert_eq!(n.protocol, "vmess");
+        assert_eq!(n.name, "VM-01");
+        assert_eq!(n.port, 443);
+        let user = &n.outbound["settings"]["vnext"][0]["users"][0];
+        assert_eq!(user["id"], "uuid-here");
+        assert_eq!(user["alterId"], 0);
+        assert_eq!(user["security"], "auto");
+        let stream = &n.outbound["streamSettings"];
+        assert_eq!(stream["security"], "tls");
+        assert_eq!(stream["tlsSettings"]["serverName"], "vm.example.com");
+        assert_eq!(stream["tlsSettings"]["alpn"], serde_json::json!(["h2", "http/1.1"]));
+    }
+
+    #[test]
+    fn parse_subscription_vmess_none_security() {
+        let json = r#"{"v":"2","ps":"VM-Plain","add":"vm.example.com","port":80,"id":"uuid","aid":0,"net":"tcp","tls":""}"#;
+        let nodes = parse_subscription(&vmess_uri(json));
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["security"], "none");
+        assert!(stream.get("tlsSettings").is_none());
+    }
+
+    #[test]
+    fn parse_subscription_vmess_port_and_aid_as_strings() {
+        let json = r#"{"v":"2","ps":"VM-Str","add":"vm.example.com","port":"8443","id":"uuid","aid":"2","net":"tcp","tls":"tls"}"#;
+        let nodes = parse_subscription(&vmess_uri(json));
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].port, 8443);
+        let user = &nodes[0].outbound["settings"]["vnext"][0]["users"][0];
+        assert_eq!(user["alterId"], 2);
+    }
+
+    #[test]
+    fn parse_subscription_vmess_skips_ws() {
+        let json = r#"{"v":"2","ps":"VM-WS","add":"vm.example.com","port":443,"id":"uuid","aid":0,"net":"ws","tls":"tls"}"#;
+        let nodes = parse_subscription(&vmess_uri(json));
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_vmess_fragment_overrides_ps() {
+        let json = r#"{"v":"2","ps":"Inside","add":"vm.example.com","port":443,"id":"uuid","aid":0,"net":"tcp","tls":"tls"}"#;
+        let line = format!("{}#Outside", vmess_uri(json));
+        let nodes = parse_subscription(&line);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "Outside");
+    }
+
+    #[test]
+    fn parse_subscription_vmess_invalid_base64() {
+        let text = "vmess://!!!not-base64";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
+    }
+
+    #[test]
+    fn parse_subscription_vmess_valid_base64_bad_json() {
+        // base64("not a json") = "bm90IGEganNvbg=="
+        let text = "vmess://bm90IGEganNvbg==";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 0);
     }
 }
