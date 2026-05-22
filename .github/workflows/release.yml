@@ -177,13 +177,16 @@ jobs:
       - name: Install qshell
         if: steps.gate.outputs.skip != 'true'
         run: |
-          QSHELL_VER="v2.16.0"
-          wget -q "https://devtools.qiniu.com/qshell-${QSHELL_VER}-linux-amd64.tar.gz" -O qshell.tar.gz
+          set -euo pipefail
+          QSHELL_VER="v2.19.7"
+          # 直接从 GitHub Release 下，devtools.qiniu.com 旧版本路径不稳定
+          curl -fsSL --retry 3 -o qshell.tar.gz \
+            "https://github.com/qiniu/qshell/releases/download/${QSHELL_VER}/qshell-${QSHELL_VER}-linux-amd64.tar.gz"
           tar -xzf qshell.tar.gz
-          chmod +x qshell-*-linux-amd64 2>/dev/null || true
-          chmod +x qshell 2>/dev/null || true
-          # 不同版本压缩包里的二进制文件名不同，统一找一下
-          BIN=$(find . -maxdepth 1 -type f -name 'qshell*' ! -name '*.tar.gz' | head -1)
+          BIN=$(find . -maxdepth 1 -type f -name 'qshell*' \
+                       ! -name '*.tar.gz' ! -name '*.md5' | head -1)
+          test -n "$BIN" || { echo "未找到 qshell 二进制"; ls -la; exit 1; }
+          chmod +x "$BIN"
           sudo mv "$BIN" /usr/local/bin/qshell
           qshell --version
 
