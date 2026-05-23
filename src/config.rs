@@ -381,17 +381,18 @@ fn field_u32(v: &Value, key: &str) -> Option<u32> {
 }
 
 /// 公共：把 URI 的 type / security 字段翻译成 xray streamSettings。
-/// 目前只支持 type=tcp；遇到 ws/grpc/h2/kcp/quic 等会 bail（被 parse_subscription 跳过）。
+/// 支持的传输层：tcp / ws / grpc / http (含 h2 别名)。kcp / quic 等会 bail。
 fn build_stream_settings(
     q: &HashMap<String, String>,
     address: &str,
     default_security: &str,
 ) -> Result<Value> {
-    let network = q.get("type").map(String::as_str).unwrap_or("tcp");
-    anyhow::ensure!(
-        network == "tcp",
-        "暂不支持 type={network} 的流传输（仅支持 tcp）"
-    );
+    // URI 里有的写 h2 有的写 http，xray 的 network 字段统一是 http
+    let raw_network = q.get("type").map(String::as_str).unwrap_or("tcp");
+    let network = match raw_network {
+        "h2" => "http",
+        other => other,
+    };
 
     let security_raw = q.get("security").map(String::as_str).unwrap_or("");
     let security = if security_raw.is_empty() {
@@ -401,10 +402,26 @@ fn build_stream_settings(
     };
 
     let mut stream = json!({
-        "network": "tcp",
+        "network": network,
         "security": security,
     });
 
+    // 流传输层
+    match network {
+        "tcp" => {}
+        "ws" => {
+            stream["wsSettings"] = build_ws_settings(q);
+        }
+        "grpc" => {
+            stream["grpcSettings"] = build_grpc_settings(q);
+        }
+        "http" => {
+            stream["httpSettings"] = build_http_settings(q);
+        }
+        other => anyhow::bail!("暂不支持的传输层: type={other}"),
+    }
+
+    // 安全层
     match security {
         "reality" => {
             stream["realitySettings"] = build_reality_settings(q)?;
@@ -417,6 +434,57 @@ fn build_stream_settings(
     }
 
     Ok(stream)
+}
+
+fn build_ws_settings(q: &HashMap<String, String>) -> Value {
+    let path = q
+        .get("path")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "/".to_string());
+    let host = q.get("host").cloned().unwrap_or_default();
+    if host.is_empty() {
+        json!({ "path": path })
+    } else {
+        json!({
+            "path": path,
+            "headers": { "Host": host },
+        })
+    }
+}
+
+fn build_grpc_settings(q: &HashMap<String, String>) -> Value {
+    // 不同客户端命名不一致：serviceName / servicename / path 都见过
+    let service_name = q
+        .get("serviceName")
+        .or_else(|| q.get("servicename"))
+        .or_else(|| q.get("path"))
+        .cloned()
+        .unwrap_or_default();
+    let mode = q.get("mode").map(String::as_str).unwrap_or("");
+    json!({
+        "serviceName": service_name,
+        "multiMode": mode == "multi",
+    })
+}
+
+fn build_http_settings(q: &HashMap<String, String>) -> Value {
+    let path = q
+        .get("path")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "/".to_string());
+    let host_str = q.get("host").cloned().unwrap_or_default();
+    let hosts: Vec<&str> = host_str
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
+    if hosts.is_empty() {
+        json!({ "path": path })
+    } else {
+        json!({ "path": path, "host": hosts })
+    }
 }
 
 fn build_reality_settings(q: &HashMap<String, String>) -> Result<Value> {
@@ -615,8 +683,68 @@ mod tests {
     }
 
     #[test]
-    fn parse_subscription_skips_ws_transport() {
-        let text = "vless://uuid@example.com:443?type=ws&security=tls#WS-Node";
+    fn parse_subscription_vless_ws_with_host_and_path() {
+        let text = "vless://uuid@example.com:443\
+            ?type=ws&security=tls&host=cdn.example.com&path=%2Fws%2Fendpoint&sni=cdn.example.com#WS-Node";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["network"], "ws");
+        assert_eq!(stream["wsSettings"]["path"], "/ws/endpoint");
+        assert_eq!(stream["wsSettings"]["headers"]["Host"], "cdn.example.com");
+        assert_eq!(stream["security"], "tls");
+        assert_eq!(stream["tlsSettings"]["serverName"], "cdn.example.com");
+    }
+
+    #[test]
+    fn parse_subscription_vless_ws_path_only_no_host_header() {
+        let text = "vless://uuid@example.com:443?type=ws&security=none&path=/api#WS-Bare";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["network"], "ws");
+        assert_eq!(stream["wsSettings"]["path"], "/api");
+        assert!(stream["wsSettings"].get("headers").is_none());
+    }
+
+    #[test]
+    fn parse_subscription_vless_grpc_gun_mode() {
+        let text = "vless://uuid@example.com:443\
+            ?type=grpc&security=tls&serviceName=my-service&sni=example.com#GRPC-Gun";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["network"], "grpc");
+        assert_eq!(stream["grpcSettings"]["serviceName"], "my-service");
+        assert_eq!(stream["grpcSettings"]["multiMode"], false);
+    }
+
+    #[test]
+    fn parse_subscription_vless_grpc_multi_mode() {
+        let text = "vless://uuid@example.com:443\
+            ?type=grpc&security=tls&serviceName=svc&mode=multi#GRPC-Multi";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["grpcSettings"]["multiMode"], true);
+    }
+
+    #[test]
+    fn parse_subscription_vless_h2_alias_normalized_to_http() {
+        let text = "vless://uuid@example.com:443\
+            ?type=h2&security=tls&host=a.com,b.com&path=/p#H2";
+        let nodes = parse_subscription(text);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        // h2 应当被归一化为 http（xray 的 network 字段名）
+        assert_eq!(stream["network"], "http");
+        assert_eq!(stream["httpSettings"]["path"], "/p");
+        assert_eq!(stream["httpSettings"]["host"], serde_json::json!(["a.com", "b.com"]));
+    }
+
+    #[test]
+    fn parse_subscription_skips_unsupported_transport_kcp() {
+        let text = "vless://uuid@example.com:443?type=kcp&security=none#KCP";
         let nodes = parse_subscription(text);
         assert_eq!(nodes.len(), 0);
     }
@@ -664,10 +792,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_subscription_trojan_skips_ws() {
-        let text = "trojan://pwd@example.com:443?type=ws&security=tls&sni=foo.com#WS";
+    fn parse_subscription_trojan_ws_parsed() {
+        let text = "trojan://pwd@example.com:443\
+            ?type=ws&security=tls&sni=foo.com&host=foo.com&path=/trojan#TJ-WS";
         let nodes = parse_subscription(text);
-        assert_eq!(nodes.len(), 0);
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].protocol, "trojan");
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["network"], "ws");
+        assert_eq!(stream["wsSettings"]["path"], "/trojan");
+        assert_eq!(stream["wsSettings"]["headers"]["Host"], "foo.com");
+        assert_eq!(stream["security"], "tls");
     }
 
     #[test]
@@ -766,10 +901,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_subscription_vmess_skips_ws() {
-        let json = r#"{"v":"2","ps":"VM-WS","add":"vm.example.com","port":443,"id":"uuid","aid":0,"net":"ws","tls":"tls"}"#;
+    fn parse_subscription_vmess_ws_parsed() {
+        let json = r#"{"v":"2","ps":"VM-WS","add":"vm.example.com","port":443,"id":"uuid","aid":0,"net":"ws","tls":"tls","host":"cdn.vm.com","path":"/vm-ws"}"#;
         let nodes = parse_subscription(&vmess_uri(json));
-        assert_eq!(nodes.len(), 0);
+        assert_eq!(nodes.len(), 1);
+        let stream = &nodes[0].outbound["streamSettings"];
+        assert_eq!(stream["network"], "ws");
+        assert_eq!(stream["wsSettings"]["path"], "/vm-ws");
+        assert_eq!(stream["wsSettings"]["headers"]["Host"], "cdn.vm.com");
+        assert_eq!(stream["security"], "tls");
     }
 
     #[test]

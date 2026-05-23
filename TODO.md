@@ -48,8 +48,9 @@
   - 备注：解压的 zip 现在来自编译期校验过 SHA256 的可信源（GitHub release），白名单兜底仍在
 - [ ] **#16 路由规则写死** — cn 直连、`domainStrategy` 都硬编码，没法配
   - 位置：`src/config.rs:156-167`
-- [ ] **#17 VLESS 网络层只生成 tcp 配置** — 没有 `wsSettings`/`grpcSettings`/`httpSettings`，订阅里有 ws/grpc 节点会启动后连不通
+- [x] **#17 VLESS 网络层只生成 tcp 配置** — 没有 `wsSettings`/`grpcSettings`/`httpSettings`，订阅里有 ws/grpc 节点会启动后连不通
   - 位置：`src/config.rs:80, 99-120`
+  - 备注：`build_stream_settings` 改为按 network 分派，新增 ws / grpc / http 三种传输层（h2 自动归一化到 http）；新加 8 个测试覆盖 VLESS+Trojan+VMess 的 ws、grpc gun/multi、http 多 host 等组合
 - [x] **#18 `Cargo.toml` 元信息缺失** — 没 `description` / `license` / `repository` / `authors` / `rust-version`
   - 位置：`Cargo.toml`
 - [x] **#19 没有 LICENSE 文件** — README 写了 MIT 但仓库根目录没 `LICENSE` 文件
