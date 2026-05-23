@@ -75,6 +75,10 @@ enum Command {
     /// 列出订阅里所有可用节点（同义词: ls）。
     #[command(alias = "ls")]
     List,
+
+    /// 交互式选择节点（测延迟、列表上下选、确认即切换；同义词: pick / switch）。
+    #[command(alias = "pick", alias = "switch")]
+    Use,
 }
 
 #[tokio::main]
@@ -114,6 +118,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
         (false, Some(Command::Test)) => return commands::cmd_test(cli.http_port).await,
         (false, Some(Command::Logs { lines, follow })) => {
             return commands::cmd_logs(*lines, *follow).await;
+        }
+        (false, Some(Command::Use)) => {
+            return commands::cmd_use(cli.socks_port, cli.http_port).await;
         }
         (false, None) => {} // fall through to foreground 默认行为
     }

@@ -91,6 +91,7 @@ export SUNRISE_SUB_URL='https://你的订阅地址'
 
 ```bash
 sunrise-xray                 # 前台跑（Ctrl+C 停）
+sunrise-xray use             # 交互选节点：测延迟 → 上下选 → 自动切换（推荐）
 sunrise-xray on              # 后台启动（同义词: start）
 sunrise-xray off             # 停止后台（同义词: stop）
 sunrise-xray restart         # stop + start
@@ -101,6 +102,8 @@ sunrise-xray logs -f         # 持续跟踪（Ctrl+C 停）
 sunrise-xray logs -n 200     # 看最后 200 行
 sunrise-xray list            # 列出所有节点（同义词: --list / ls）
 ```
+
+`use` 子命令会并发测每个节点的 TCP 连接延迟（3 秒超时），按延迟从小到大排序后进入交互菜单。↑↓ 移动，Enter 确认，Esc 取消。选完自动 stop 旧 daemon + 用新节点 start，最后跑一遍 test 验证连通性。
 
 后台模式只在 Unix（Linux / macOS）上工作；Windows 直接前台跑。
 状态文件位置（cache 目录里）：`sunrise-xray.pid` / `sunrise-xray.log` / `state.json`。

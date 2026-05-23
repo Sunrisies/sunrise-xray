@@ -416,6 +416,147 @@ pub async fn cmd_test(http_port: u16) -> Result<()> {
     }
     Ok(())
 }
+/// `use`：交互式选择节点。
+///
+/// 流程：拉订阅 → 并发测每个节点的 TCP 连接延迟（3s 超时）→ 按延迟排序 →
+/// dialoguer Select 让用户上下选 → 选完后停掉旧 daemon、用新节点起 daemon。
+pub async fn cmd_use(socks_port: u16, http_port: u16) -> Result<()> {
+    use std::time::Instant;
+
+    // 准备：订阅 → 节点列表
+    let sub_url_raw = std::env::var("SUNRISE_SUB_URL")
+        .map_err(|_| anyhow!("环境变量 SUNRISE_SUB_URL 未设置"))?;
+    let sub_url = url::Url::parse(&sub_url_raw)
+        .with_context(|| format!("SUNRISE_SUB_URL 不是合法 URL: {sub_url_raw}"))?;
+
+    println!("[1/3] 拉取订阅...");
+    let raw = fetch::fetch_subscription(sub_url.as_str()).await?;
+    let nodes = config::parse_subscription(&raw);
+    anyhow::ensure!(!nodes.is_empty(), "订阅里没有可用节点");
+
+    println!("[2/3] 测试 {} 个节点延迟（3s 超时，并发）...", nodes.len());
+    let latencies = measure_latencies(&nodes).await;
+
+    // 用一个排序索引：先按延迟升序，超时的丢到最后；但显示时仍带原始 idx
+    let mut order: Vec<usize> = (0..nodes.len()).collect();
+    order.sort_by_key(|&i| match latencies[i] {
+        Some(ms) => (0u8, ms),
+        None => (1, u32::MAX),
+    });
+
+    let items: Vec<String> = order
+        .iter()
+        .map(|&i| {
+            let lat_str = match latencies[i] {
+                Some(ms) => format!("{:>5}ms", ms),
+                None => "  超时 ".to_string(),
+            };
+            format!(
+                "[{:02}] {}  {:<8}  {}",
+                i, lat_str, nodes[i].protocol, nodes[i].name
+            )
+        })
+        .collect();
+
+    println!("[3/3] 选择节点：↑↓ 导航，Enter 确认，Esc/Ctrl+C 取消");
+    let selection = dialoguer::Select::new()
+        .with_prompt("当前可用节点")
+        .items(&items)
+        .default(0)
+        .interact_opt()
+        .context("交互式选择失败（非 TTY 环境下无法使用 'use'，请用 --node + restart）")?;
+
+    let pick_in_order = match selection {
+        Some(i) => i,
+        None => {
+            println!("已取消，未切换。");
+            return Ok(());
+        }
+    };
+    let orig_idx = order[pick_in_order];
+    let chosen = &nodes[orig_idx];
+    let lat = latencies[orig_idx];
+
+    println!();
+    println!(
+        "→ 切换到 [{:02}] {} ({})  延迟: {}",
+        orig_idx,
+        chosen.name,
+        chosen.protocol,
+        lat.map(|ms| format!("{}ms", ms)).unwrap_or_else(|| "未知".into())
+    );
+
+    // 生成 xray 配置
+    let config_path = paths::xray_config_path()?;
+    paths::ensure_parent(&config_path).await?;
+    let local = config::build_local_config(&chosen.outbound, socks_port, http_port);
+    let bytes = serde_json::to_vec_pretty(&local).context("序列化本地配置失败")?;
+    tokio::fs::write(&config_path, &bytes)
+        .await
+        .with_context(|| format!("写入配置文件失败: {}", config_path.display()))?;
+
+    let binary = xray::ensure_xray().await?;
+
+    // 停掉现有 daemon（如果在跑），等 300ms 给端口空出来
+    cmd_stop()?;
+    std::thread::sleep(Duration::from_millis(300));
+
+    // 用 chosen 起新 daemon
+    let owned_node = config::ProxyNode {
+        name: chosen.name.clone(),
+        protocol: chosen.protocol,
+        address: chosen.address.clone(),
+        port: chosen.port,
+        outbound: chosen.outbound.clone(),
+    };
+    #[cfg(unix)]
+    {
+        spawn_xray_detached(&binary, &config_path, orig_idx, &owned_node, socks_port, http_port)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (binary, config_path, owned_node);
+        anyhow::bail!("Windows 暂不支持后台模式；前台跑请用 'sunrise-xray --node {} '", orig_idx);
+    }
+
+    // 顺便测一下新节点是否真的通了
+    println!();
+    println!("等 1 秒后测试新节点连通性...");
+    let _ = Instant::now();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    cmd_test(http_port).await?;
+
+    Ok(())
+}
+
+/// 并发测每个节点的 TCP connect 延迟。3 秒超时，超时记 None。
+async fn measure_latencies(nodes: &[config::ProxyNode]) -> Vec<Option<u32>> {
+    use tokio::net::TcpStream;
+    use tokio::task::JoinSet;
+    use tokio::time::{timeout, Instant};
+
+    let mut set = JoinSet::new();
+    for (i, n) in nodes.iter().enumerate() {
+        let addr = format!("{}:{}", n.address, n.port);
+        set.spawn(async move {
+            let start = Instant::now();
+            let r = timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await;
+            let lat = match r {
+                Ok(Ok(_)) => Some(start.elapsed().as_millis() as u32),
+                _ => None,
+            };
+            (i, lat)
+        });
+    }
+
+    let mut results = vec![None; nodes.len()];
+    while let Some(res) = set.join_next().await {
+        if let Ok((i, lat)) = res {
+            results[i] = lat;
+        }
+    }
+    results
+}
 
 /// `logs`：看后台日志（-n N 显示最后 N 行，-f 持续跟踪）。
 pub async fn cmd_logs(lines: usize, follow: bool) -> Result<()> {
