@@ -239,6 +239,34 @@ jobs:
           qshell fput --overwrite "$QINIU_BUCKET" "sunrise-xray/${TAG}/install.sh" install.sh.rendered
           qshell fput --overwrite "$QINIU_BUCKET" "sunrise-xray/install.sh" install.sh.rendered
 
+      - name: Refresh Qiniu CDN cache
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          QINIU_CDN_DOMAIN: ${{ secrets.QINIU_CDN_DOMAIN }}
+        run: |
+          # Qiniu CDN 默认给文件设 max-age=31536000（1 年），不主动刷新
+          # 的话 latest.txt 和 install.sh 的更新永远到不了用户。这里把这
+          # 两个"指针文件"显式刷新一次。每日免费配额 200 条，绰绰有余。
+          set +e
+          domain="${QINIU_CDN_DOMAIN%/}"
+          if [ -z "$domain" ]; then
+            echo "::warning::QINIU_CDN_DOMAIN 未设置，跳过 CDN 刷新"
+            exit 0
+          fi
+          cat > cdn-refresh-urls.txt <<EOF
+          ${domain}/sunrise-xray/latest.txt
+          ${domain}/sunrise-xray/install.sh
+          EOF
+          echo "刷新 CDN 缓存："
+          cat cdn-refresh-urls.txt
+          # qshell v2 的命令名是 cdnrefresh，参数是文件路径
+          if qshell cdnrefresh cdn-refresh-urls.txt; then
+            echo "✓ CDN 缓存刷新请求已提交（边缘节点通常 5 分钟内生效）"
+          else
+            echo "::warning::qshell cdnrefresh 命令失败。可能是版本参数差异，请去 Qiniu 控制台手动刷新或检查 qshell --help"
+            qshell cdnrefresh --help 2>&1 | head -30 || true
+          fi
+
       - name: Summary
         if: steps.gate.outputs.skip != 'true'
         env:

@@ -86,14 +86,24 @@ fetch_text() {
     return 1
 }
 
-# 试一组 URL，第一个下载并通过 SHA256 校验的胜出
+# 试一组 URL，第一个下载并通过 SHA256 校验的胜出。
+# curl 选项说明：
+#   --connect-timeout 15  ：15 秒内建立不了 TCP 就放弃这个 mirror
+#   --speed-time 20       ：传输持续 20 秒
+#   --speed-limit 50000   ：如果平均速度低于 50KB/s 就放弃（多半是路由烂掉了）
+#   --max-time 300        ：兜底总时长 5 分钟
+# 这样境外机器走 Qiniu CDN 路径不通时，能快速 fallback 到 ghproxy / GitHub。
 download_with_fallback() {
     local out="$1" expected_sha="$2"
     shift 2
     local url got
     for url in "$@"; do
         log "尝试下载: $url"
-        if curl -fSL --max-time 180 -o "$out" "$url"; then
+        if curl -fSL \
+                --connect-timeout 15 \
+                --speed-time 20 --speed-limit 50000 \
+                --max-time 300 \
+                -o "$out" "$url"; then
             got=$(sha256_of "$out")
             if [[ "$got" == "$expected_sha" ]]; then
                 log "  校验通过 ($got)"
@@ -110,7 +120,8 @@ download_with_fallback() {
 
 resolve_latest_tag() {
     local urls=()
-    [[ -n "$MIRROR_BASE" ]] && urls+=("$MIRROR_BASE/sunrise-xray/latest.txt")
+    # Qiniu 的 latest.txt 默认 CDN 缓存极长，加随机 query string 强制回源
+    [[ -n "$MIRROR_BASE" ]] && urls+=("$MIRROR_BASE/sunrise-xray/latest.txt?t=$(date +%s)")
     urls+=(
         "https://ghproxy.net/https://api.github.com/repos/$REPO/releases/latest"
         "https://gh-proxy.com/https://api.github.com/repos/$REPO/releases/latest"
