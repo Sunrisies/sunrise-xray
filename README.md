@@ -87,6 +87,24 @@ export SUNRISE_SUB_URL='https://你的订阅地址'
 节点选择可通过 `--node` 参数或 `SUNRISE_NODE` 环境变量指定（CLI 优先）。
 端口可通过 `--socks-port` / `--http-port` 或 `SUNRISE_SOCKS_PORT` / `SUNRISE_HTTP_PORT` 指定。
 
+## 子命令速查
+
+```bash
+sunrise-xray                 # 前台跑（Ctrl+C 停）
+sunrise-xray on              # 后台启动（同义词: start）
+sunrise-xray off             # 停止后台（同义词: stop）
+sunrise-xray restart         # stop + start
+sunrise-xray status          # 看 PID / 节点 / 端口 / 运行时长
+sunrise-xray test            # 走代理 GET 几个站点测可用性
+sunrise-xray logs            # 看后台日志（默认最后 50 行）
+sunrise-xray logs -f         # 持续跟踪（Ctrl+C 停）
+sunrise-xray logs -n 200     # 看最后 200 行
+sunrise-xray list            # 列出所有节点（同义词: --list / ls）
+```
+
+后台模式只在 Unix（Linux / macOS）上工作；Windows 直接前台跑。
+状态文件位置（cache 目录里）：`sunrise-xray.pid` / `sunrise-xray.log` / `state.json`。
+
 ### 编译时
 
 第一次编译需要网络（从 GitHub release 下 xray-core，约 30 秒~几分钟）。已经按国内常见镜像顺序自动重试，无需 VPN 也大概率能成功。

@@ -1,6 +1,6 @@
 [package]
 name = "sunrise-xray"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.85"
 description = "把订阅链接自动拉成本地 Xray 代理服务的小工具"
@@ -23,6 +23,10 @@ url = "2"
 percent-encoding = "2"
 clap = { version = "4", features = ["derive", "env"] }
 dirs = "5"
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [build-dependencies]
 anyhow = "1"

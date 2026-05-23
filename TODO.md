@@ -28,8 +28,9 @@
 - [x] **#8 `which` 命令不跨平台** — Windows 没 `which`。改用 `which` crate
   - 位置：`src/xray.rs:56-67`
   - 备注：xray 改为编译期 embed 后已删除自动发现逻辑
-- [ ] **#9 xray 日志无文件落地、无轮转** — stdout/stderr 直接 inherit，长跑撑爆日志文件
+- [~] **#9 xray 日志无文件落地、无轮转** — stdout/stderr 直接 inherit，长跑撑爆日志文件
   - 位置：`src/xray.rs:206-207`
+  - 备注：daemon 模式（`on` 子命令）已经把 stdout/stderr 落地到 `~/.cache/sunrise-xray/sunrise-xray.log`；前台模式仍走 inherit。轮转尚未实现
 - [ ] **#10 失败无重试** — 订阅请求 + 单镜像下载都是一次失败就跳，没有 backoff 重试
   - 位置：`src/fetch.rs:13-22`、`src/xray.rs:144-159`
 - [ ] **#11 订阅格式探测脆弱** — `body.contains("://")` 不识别 clash YAML 等格式
