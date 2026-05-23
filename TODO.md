@@ -42,8 +42,9 @@
 
 ## P2 — 代码质量 / 规范
 
-- [ ] **#14 零测试** — `config.rs` 的 URI 解析、`fetch.rs` 的 base64 兼容（URL-safe / padding）边界条件都没 unit test
+- [~] **#14 零测试** — `config.rs` 的 URI 解析、`fetch.rs` 的 base64 兼容（URL-safe / padding）边界条件都没 unit test
   - 位置：全仓
+  - 备注：已有 42 个 unit test（config.rs / util.rs / embedded.rs），覆盖订阅解析、ss/vmess/trojan/vless URI、ws/grpc/h2 传输层、base64 边界。缺：fetch.rs HTTP 路径、commands.rs daemon 生命周期、端到端流程
 - [x] **#15 `extract_xray_bin` 未显式拒绝路径遍历** — 目前靠白名单文件名兜底，没用 `entry.enclosed_name()` 校验，逻辑一变就会有 zip-slip 风险
   - 位置：`src/xray.rs:161-197`
   - 备注：解压的 zip 现在来自编译期校验过 SHA256 的可信源（GitHub release），白名单兜底仍在
