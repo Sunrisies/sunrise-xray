@@ -1,6 +1,6 @@
 [package]
 name = "sunrise-xray"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.85"
 description = "把订阅链接自动拉成本地 Xray 代理服务的小工具"

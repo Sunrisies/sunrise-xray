@@ -7,15 +7,16 @@
 #   curl -fsSL https://<your-cdn>/sunrise-xray/install.sh | bash -s -- --version v0.1.0
 #
 # Options (after `bash -s --`):
-#   --version <tag>   指定版本（默认 latest，例如 v0.1.0）
-#   --dir <path>      安装目录（默认 ~/.local/bin）
-#   --mirror <url>    覆盖优先镜像基址（也可用 SUNRISE_MIRROR_BASE env）
-#   -h, --help        帮助
+#   --version <tag>     指定版本（默认 latest，例如 v0.1.0）
+#   --dir <path>        安装目录（默认 ~/.local/bin）
+#   --mirror <url>      覆盖优先镜像基址（也可用 SUNRISE_MIRROR_BASE env）
+#   --no-path-update    不要自动把安装目录写进 shell rc（默认会写）
+#   -h, --help          帮助
 #
 set -euo pipefail
 
 REPO="Sunrisies/sunrise-xray"
-# 七牛 CDN 基址。配好 Qiniu 后改成你的 CDN 域名（不带尾斜杠），例如：
+# 七牛 CDN 基址。配好 Qiniu 后改成你的 CDN 域名（不带尾斜杠），例如:
 #   DEFAULT_MIRROR_BASE="https://cdn.example.com"
 # 留空则跳过 Qiniu，仅使用 ghproxy → GitHub。
 DEFAULT_MIRROR_BASE=""
@@ -23,12 +24,14 @@ DEFAULT_MIRROR_BASE=""
 VERSION="${SUNRISE_VERSION:-latest}"
 INSTALL_DIR="${SUNRISE_INSTALL_DIR:-$HOME/.local/bin}"
 MIRROR_BASE="${SUNRISE_MIRROR_BASE:-$DEFAULT_MIRROR_BASE}"
+UPDATE_PATH=1
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --version) VERSION="$2"; shift 2 ;;
-        --dir)     INSTALL_DIR="$2"; shift 2 ;;
-        --mirror)  MIRROR_BASE="$2"; shift 2 ;;
+        --version)         VERSION="$2"; shift 2 ;;
+        --dir)             INSTALL_DIR="$2"; shift 2 ;;
+        --mirror)          MIRROR_BASE="$2"; shift 2 ;;
+        --no-path-update)  UPDATE_PATH=0; shift ;;
         -h|--help)
             sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
@@ -187,14 +190,68 @@ fi
 install -m 0755 "$BIN_SRC" "$DEST"
 log "已安装到: $DEST"
 
-# PATH 检查
-case ":$PATH:" in
-    *":$INSTALL_DIR:"*) ;;
-    *)
-        warn "$INSTALL_DIR 不在 PATH 中。请把下面这行加进 ~/.bashrc 或 ~/.zshrc："
-        warn "  export PATH=\"$INSTALL_DIR:\$PATH\""
-        ;;
-esac
+# 把指定目录写入对应 shell 的 rc 文件，幂等（写入一次就不再加）。
+# 走 marker 注释而非"内容包含 dir 即跳过"，避免误判已有同名 dir 字符串。
+ensure_path_in_rc() {
+    local dir="$1"
+
+    # 已经在 PATH 中：什么都不做
+    case ":$PATH:" in
+        *":$dir:"*) return 0 ;;
+    esac
+
+    # 用户禁用自动 PATH 更新：退回只打印提示
+    if [[ "$UPDATE_PATH" != "1" ]]; then
+        warn "$dir 不在 PATH 中。手动加这条到 rc 才能直接敲 sunrise-xray："
+        warn "  export PATH=\"$dir:\$PATH\""
+        return 0
+    fi
+
+    # 探测用户的登录 shell，选 rc 文件 + 对应语法
+    local rc="" line=""
+    case "${SHELL:-}" in
+        */zsh)
+            rc="$HOME/.zshrc"
+            line="export PATH=\"$dir:\$PATH\""
+            ;;
+        */bash)
+            # Linux 普通用户的 .profile 会处理 .local/bin，但 root 和 macOS 不会
+            # 直接写 .bashrc 最稳，新交互 shell 必读
+            rc="$HOME/.bashrc"
+            line="export PATH=\"$dir:\$PATH\""
+            ;;
+        */fish)
+            rc="$HOME/.config/fish/config.fish"
+            line="set -gx PATH \"$dir\" \$PATH"
+            ;;
+        *)
+            # 其它 / 未知 shell：写 POSIX 通用的 .profile
+            rc="$HOME/.profile"
+            line="export PATH=\"$dir:\$PATH\""
+            ;;
+    esac
+
+    local marker="# Added by sunrise-xray installer (PATH for $dir)"
+
+    # 已经写过同名 dir 的条目：跳过
+    if [[ -f "$rc" ]] && grep -qF -- "$marker" "$rc" 2>/dev/null; then
+        log "PATH 已在 $rc 里配置过，跳过"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$rc")"
+    {
+        echo ""
+        echo "$marker"
+        echo "$line"
+    } >> "$rc"
+
+    log "已把 $dir 写入 $rc"
+    log "本终端立即生效：source $rc"
+    log "（新开终端则自动生效，不需要 source）"
+}
+
+ensure_path_in_rc "$INSTALL_DIR"
 
 cat <<EOF
 
