@@ -81,6 +81,7 @@ brew install xxx                    # brew 也走
 
 ```bash
 sunrise-xray use              # ★ 交互选节点：测延迟 → ↑↓ 选 → 自动切换 + 测试
+sunrise-xray autoswitch       # 健康检查 + 不健康时自动切节点（cron 用）
 sunrise-xray on               # 后台启动
 sunrise-xray off              # 停止
 sunrise-xray restart          # 重启（用同一个或新指定的节点）
@@ -91,6 +92,17 @@ sunrise-xray logs -f          # tail -f
 sunrise-xray logs -n 200      # 看最后 200 行
 sunrise-xray list             # 列出订阅里所有节点
 ```
+
+### 自愈：让节点挂了自动换
+
+加一行 crontab：
+
+```bash
+# 每 2 分钟检查一次：节点健康就不动，挂了自动切到延迟最低的活节点
+*/2 * * * * /home/you/.local/bin/sunrise-xray autoswitch >/dev/null 2>&1
+```
+
+`autoswitch` 90% 时间走快速路径（GET `https://www.google.com/generate_204`，~1 秒），只有失败才会拉订阅、测全节点、切换。exit code 0 表示「健康或切换成功」，1 表示「失败且没有可用备选」（cron 不会反复报错）。
 
 ### launchd 模式的常用命令（如果你还在用）
 
@@ -367,6 +379,7 @@ Build deps：`ureq` / `sha2`。
 | 想做的事 | 命令 |
 |---|---|
 | 交互选节点 | `sunrise-xray use` |
+| **自动健康检查 + 失活换节点** | `sunrise-xray autoswitch` |
 | 看代理状态 | `sunrise-xray status` |
 | 看出口 IP / 验证可用 | `sunrise-xray test` |
 | 看实时日志 | `sunrise-xray logs -f` |

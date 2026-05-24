@@ -79,6 +79,10 @@ enum Command {
     /// 交互式选择节点（测延迟、列表上下选、确认即切换；同义词: pick / switch）。
     #[command(alias = "pick", alias = "switch")]
     Use,
+
+    /// 健康检查 + 自动故障转移。当前节点失活时自动切到延迟最低的活节点。
+    /// 适合放在 crontab 里定时跑（健康时秒退，cron 友好）。
+    Autoswitch,
 }
 
 #[tokio::main]
@@ -121,6 +125,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
         (false, Some(Command::Use)) => {
             return commands::cmd_use(cli.socks_port, cli.http_port).await;
+        }
+        (false, Some(Command::Autoswitch)) => {
+            return commands::cmd_autoswitch(cli.socks_port, cli.http_port).await;
         }
         (false, None) => {} // fall through to foreground 默认行为
     }

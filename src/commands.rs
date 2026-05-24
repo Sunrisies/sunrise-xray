@@ -529,6 +529,128 @@ pub async fn cmd_use(socks_port: u16, http_port: u16) -> Result<()> {
     Ok(())
 }
 
+/// `autoswitch`：先做一次健康检查，不健康就自动切到最优活节点。
+///
+/// 设计为 cron 友好：健康时几乎零成本（一次 HTTP GET 5s 超时），
+/// 不健康时才走全节点 latency 探测 + 切换。exit code 0 表示当前是健康
+/// 状态（含切换成功）；exit code 1 表示尝试切换但没有可用节点。
+pub async fn cmd_autoswitch(socks_port: u16, http_port: u16) -> Result<()> {
+    // 1) 健康检查当前代理
+    if check_proxy_health(http_port).await {
+        if let Some(st) = read_state()? {
+            println!("✓ 代理健康，无需切换 [{}] {}", st.node_index, st.node_name);
+        } else {
+            println!("✓ 代理健康（无 sunrise-xray daemon state，可能是外部托管）");
+        }
+        return Ok(());
+    }
+
+    println!("⚠ 健康检查失败，准备切换节点");
+
+    // 2) 拉订阅 + 测全部节点
+    let sub_url_raw = std::env::var("SUNRISE_SUB_URL")
+        .map_err(|_| anyhow!("环境变量 SUNRISE_SUB_URL 未设置；autoswitch 需要订阅地址才能选新节点"))?;
+    let sub_url = url::Url::parse(&sub_url_raw)
+        .with_context(|| format!("SUNRISE_SUB_URL 不是合法 URL: {sub_url_raw}"))?;
+    let raw = fetch::fetch_subscription(sub_url.as_str()).await?;
+    let nodes = config::parse_subscription(&raw);
+    anyhow::ensure!(!nodes.is_empty(), "订阅里没有可用节点");
+
+    let latencies = measure_latencies(&nodes).await;
+    let current_idx = read_state()?.map(|s| s.node_index);
+
+    // 3) 排除当前节点 + 排除超时节点 → 按延迟升序找最优候选
+    let mut candidates: Vec<(usize, u32)> = (0..nodes.len())
+        .filter_map(|i| latencies[i].map(|lat| (i, lat)))
+        .filter(|(i, _)| Some(*i) != current_idx)
+        .collect();
+    candidates.sort_by_key(|(_, lat)| *lat);
+
+    let (new_idx, new_lat) = match candidates.first() {
+        Some((i, l)) => (*i, *l),
+        None => anyhow::bail!("没有可用的备选节点（其它节点全部超时）"),
+    };
+    let chosen = &nodes[new_idx];
+    println!(
+        "→ 切换到 [{:02}] {} ({}) {}ms",
+        new_idx, chosen.name, chosen.protocol, new_lat
+    );
+
+    // 4) 生成新配置 + 重启 daemon
+    let config_path = paths::xray_config_path()?;
+    paths::ensure_parent(&config_path).await?;
+    let local = config::build_local_config(&chosen.outbound, socks_port, http_port);
+    let bytes = serde_json::to_vec_pretty(&local).context("序列化本地配置失败")?;
+    tokio::fs::write(&config_path, &bytes)
+        .await
+        .with_context(|| format!("写入配置文件失败: {}", config_path.display()))?;
+
+    let binary = xray::ensure_xray().await?;
+
+    cmd_stop()?;
+    std::thread::sleep(Duration::from_millis(300));
+
+    let owned = config::ProxyNode {
+        name: chosen.name.clone(),
+        protocol: chosen.protocol,
+        address: chosen.address.clone(),
+        port: chosen.port,
+        outbound: chosen.outbound.clone(),
+    };
+
+    #[cfg(unix)]
+    {
+        spawn_xray_detached(&binary, &config_path, new_idx, &owned, socks_port, http_port)?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (binary, owned);
+        anyhow::bail!("Windows 不支持后台模式");
+    }
+
+    // 5) 给新 xray 1.5 秒预热，再做一次确认
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    if check_proxy_health(http_port).await {
+        println!("✓ 新节点健康");
+    } else {
+        // 不致命——切换成功但新节点也可能挂；不抛错让 cron 友好（避免每 2 分钟报错）
+        eprintln!("⚠ 切换完成但新节点健康检查也失败，下次 autoswitch 会再试");
+    }
+    Ok(())
+}
+
+/// 健康探测：先 TCP probe 本地端口（快速判断 daemon 在不在），
+/// 再走代理 GET Google generate_204（204 = 健康，5s 超时）。
+async fn check_proxy_health(http_port: u16) -> bool {
+    let addr: std::net::SocketAddr = match format!("127.0.0.1:{}", http_port).parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    if std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_err() {
+        return false;
+    }
+
+    let proxy_url = format!("http://127.0.0.1:{}", http_port);
+    let client = match reqwest::Client::builder()
+        .proxy(match reqwest::Proxy::all(&proxy_url) {
+            Ok(p) => p,
+            Err(_) => return false,
+        })
+        .timeout(Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // generate_204 是 Google 给 Chromium 用的网络探测端点：成功返回 HTTP 204，无 body。
+    // 故意不用 https://www.google.com 因为它在某些路径上会重定向、慢，污染信号。
+    match client.get("https://www.google.com/generate_204").send().await {
+        Ok(r) => r.status().as_u16() == 204,
+        Err(_) => false,
+    }
+}
+
 /// 并发测每个节点的 TCP connect 延迟。3 秒超时，超时记 None。
 async fn measure_latencies(nodes: &[config::ProxyNode]) -> Vec<Option<u32>> {
     use tokio::net::TcpStream;

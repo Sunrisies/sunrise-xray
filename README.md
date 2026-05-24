@@ -36,6 +36,7 @@ sunrise-xray use
 
 ```bash
 sunrise-xray use             # ★ 交互选节点：测延迟 → ↑↓ 选 → 自动切换（推荐）
+sunrise-xray autoswitch      # 健康检查 + 不健康时自动切到最优活节点（cron 用）
 sunrise-xray on              # 后台启动（同义词：start）
 sunrise-xray off             # 停止后台（同义词：stop）
 sunrise-xray restart         # stop + start
@@ -49,6 +50,13 @@ sunrise-xray                 # 前台跑（Ctrl+C 停，老的默认行为）
 ```
 
 `use` 子命令会并发测每个节点的 TCP 连接延迟（3 秒超时），按延迟从小到大排序后进入交互菜单。↑↓ 移动，Enter 确认，Esc 取消。选完自动 stop 旧 daemon + 用新节点 start，最后跑一遍 test 验证连通性。
+
+`autoswitch` 是 cron 友好版的自愈：通过当前代理 GET `https://www.google.com/generate_204`，204 就秒退（健康，不动），失败才自动切到延迟最低的活节点。配 cron 一行实现"节点挂了自动换"：
+
+```bash
+# crontab -e：每 2 分钟检查一次
+*/2 * * * * /home/you/.local/bin/sunrise-xray autoswitch >/dev/null 2>&1
+```
 
 非交互场景（脚本 / cron）退回老用法：`sunrise-xray --node 香港 restart`。
 
