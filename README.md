@@ -138,6 +138,8 @@ export SUNRISE_SUB_URL='https://你的订阅地址'
 
 > 隐私提示（v0.3.3+）：所有错误日志里的订阅 URL 都会被脱敏成 `scheme://host/***` 形式，路径/查询/锚点丢弃。把错误截图或日志发给别人调试时不会泄露 token——但 `SUNRISE_SUB_URL` 本身在你 shell 历史 / launchd plist / 环境变量里依然是明文，那块要自己注意。
 
+> 鲁棒性（v0.3.4+）：订阅请求会做指数退避重试（最多 3 次，1s/2s 间隔），传输层失败、5xx、429 都会重试；4xx 立即失败不浪费时间。`sunrise-xray autoswitch` cron 跑时偶发的网络抖动不再触发"伪故障"。
+
 ### 编译时网络
 
 第一次编译需要网络（从 GitHub release 下 xray-core，约 30 秒~几分钟）。已经按国内常见镜像顺序自动重试，无需 VPN 也大概率能成功。

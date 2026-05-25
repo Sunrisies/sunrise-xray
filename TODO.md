@@ -31,8 +31,9 @@
 - [~] **#9 xray 日志无文件落地、无轮转** — stdout/stderr 直接 inherit，长跑撑爆日志文件
   - 位置：`src/xray.rs:206-207`
   - 备注：daemon 模式（`on` 子命令）已经把 stdout/stderr 落地到 `~/.cache/sunrise-xray/sunrise-xray.log`；前台模式仍走 inherit。轮转尚未实现
-- [ ] **#10 失败无重试** — 订阅请求 + 单镜像下载都是一次失败就跳，没有 backoff 重试
+- [x] **#10 失败无重试** — 订阅请求 + 单镜像下载都是一次失败就跳，没有 backoff 重试
   - 位置：`src/fetch.rs:13-22`、`src/xray.rs:144-159`
+  - 备注：v0.3.4 给 `fetch_subscription` 加了 3 次指数退避（1s/2s），传输层错误 + 5xx + 429 都会重试，4xx 立即失败避免浪费。xray.rs 那块运行时下载逻辑早已删除（改为编译期 embed），无需重试
 - [ ] **#11 订阅格式探测脆弱** — `body.contains("://")` 不识别 clash YAML 等格式
   - 位置：`src/fetch.rs:25`
 - [x] **#12 没 `--version` / `--help`** — 没用 `clap`，发布版本无从查询
