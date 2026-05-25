@@ -6,7 +6,7 @@ mod paths;
 mod util;
 mod xray;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 use url::Url;
@@ -148,7 +148,7 @@ async fn fetch_sub() -> Result<String> {
     let sub_url_raw = std::env::var(SUB_URL_ENV)
         .map_err(|_| anyhow!("环境变量 {SUB_URL_ENV} 未设置；请设置订阅地址后再运行"))?;
     let sub_url = Url::parse(&sub_url_raw)
-        .with_context(|| format!("{SUB_URL_ENV} 不是合法 URL: {sub_url_raw}"))?;
+        .map_err(|e| anyhow!("{SUB_URL_ENV} 不是合法 URL: {e}"))?;
     anyhow::ensure!(
         matches!(sub_url.scheme(), "http" | "https"),
         "{SUB_URL_ENV} 必须是 http(s):// 开头，当前是: {}",

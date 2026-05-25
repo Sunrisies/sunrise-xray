@@ -94,7 +94,7 @@ pub async fn prepare(
     let sub_url_raw = std::env::var("SUNRISE_SUB_URL")
         .map_err(|_| anyhow!("环境变量 SUNRISE_SUB_URL 未设置；请设置订阅地址后再运行"))?;
     let sub_url = url::Url::parse(&sub_url_raw)
-        .with_context(|| format!("SUNRISE_SUB_URL 不是合法 URL: {sub_url_raw}"))?;
+        .map_err(|e| anyhow!("SUNRISE_SUB_URL 不是合法 URL: {e}"))?;
     anyhow::ensure!(
         matches!(sub_url.scheme(), "http" | "https"),
         "SUNRISE_SUB_URL 必须是 http(s):// 开头"
@@ -427,7 +427,7 @@ pub async fn cmd_use(socks_port: u16, http_port: u16) -> Result<()> {
     let sub_url_raw = std::env::var("SUNRISE_SUB_URL")
         .map_err(|_| anyhow!("环境变量 SUNRISE_SUB_URL 未设置"))?;
     let sub_url = url::Url::parse(&sub_url_raw)
-        .with_context(|| format!("SUNRISE_SUB_URL 不是合法 URL: {sub_url_raw}"))?;
+        .map_err(|e| anyhow!("SUNRISE_SUB_URL 不是合法 URL: {e}"))?;
 
     println!("[1/3] 拉取订阅...");
     let raw = fetch::fetch_subscription(sub_url.as_str()).await?;
@@ -551,7 +551,7 @@ pub async fn cmd_autoswitch(socks_port: u16, http_port: u16) -> Result<()> {
     let sub_url_raw = std::env::var("SUNRISE_SUB_URL")
         .map_err(|_| anyhow!("环境变量 SUNRISE_SUB_URL 未设置；autoswitch 需要订阅地址才能选新节点"))?;
     let sub_url = url::Url::parse(&sub_url_raw)
-        .with_context(|| format!("SUNRISE_SUB_URL 不是合法 URL: {sub_url_raw}"))?;
+        .map_err(|e| anyhow!("SUNRISE_SUB_URL 不是合法 URL: {e}"))?;
     let raw = fetch::fetch_subscription(sub_url.as_str()).await?;
     let nodes = config::parse_subscription(&raw);
     anyhow::ensure!(!nodes.is_empty(), "订阅里没有可用节点");
