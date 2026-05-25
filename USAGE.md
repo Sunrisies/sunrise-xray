@@ -258,6 +258,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sunrise-xray.proxy.p
 
 ## 六、故障排查
 
+> 分享日志前：v0.3.3 起所有错误输出里的订阅 URL 都被脱敏成 `scheme://host/***`，整段 path / query / fragment 不会出现，token 不会泄露。可以放心截图或粘到群里求助。  
+> 但是 `sunrise-xray logs` 输出的 xray 自身日志、launchd plist、shell 历史 里的 `SUNRISE_SUB_URL` 仍然是明文，那部分要自己注意。
+
 ### 1. `sunrise-xray test` 失败 / 上网卡
 
 ```bash

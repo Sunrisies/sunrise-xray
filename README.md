@@ -85,7 +85,7 @@ curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash
 
 ```bash
 # 装特定版本
-curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --version v0.3.1
+curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --version v0.3.3
 
 # 改安装目录（例如系统级）
 curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh | bash -s -- --dir /usr/local/bin
@@ -135,6 +135,8 @@ export SUNRISE_SUB_URL='https://你的订阅地址'
 ```
 
 订阅地址通过 `SUNRISE_SUB_URL` 环境变量传入，**不要硬编码进源码**。
+
+> 隐私提示（v0.3.3+）：所有错误日志里的订阅 URL 都会被脱敏成 `scheme://host/***` 形式，路径/查询/锚点丢弃。把错误截图或日志发给别人调试时不会泄露 token——但 `SUNRISE_SUB_URL` 本身在你 shell 历史 / launchd plist / 环境变量里依然是明文，那块要自己注意。
 
 ### 编译时网络
 
