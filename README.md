@@ -67,6 +67,8 @@ sunrise-xray logs            # 看后台日志（默认最后 50 行）
 sunrise-xray logs -f         # 持续跟踪（Ctrl+C 停）
 sunrise-xray logs -n 200     # 看最后 200 行
 sunrise-xray list            # 列出所有节点（同义词：--list / ls）
+sunrise-xray proxy on        # 输出 export 代理环境变量（eval "$(...)" 用）
+sunrise-xray proxy off       # 输出 unset 清理代理环境变量（eval "$(...)" 用）
 sunrise-xray                 # 前台跑（Ctrl+C 停）
 ```
 
@@ -78,6 +80,7 @@ sunrise-xray                 # 前台跑（Ctrl+C 停）
 | 临时关代理 | `sunrise-xray off` |
 | 重新开 | `sunrise-xray on` |
 | 看通不通 | `sunrise-xray test` |
+| 输出 / 清理代理环境变量 | `eval "$(sunrise-xray proxy on)"` / `eval "$(sunrise-xray proxy off)"` |
 
 ---
 

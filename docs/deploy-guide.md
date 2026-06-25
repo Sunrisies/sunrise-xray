@@ -288,6 +288,21 @@ SUNRISE_SUB_URL='https://sub-backup' \
 
 ### shell 代理配置推荐
 
+**推荐方式：用 `proxy` 子命令 + eval（端口自动跟随配置，改端口无需改 rc）**
+
+```bash
+# 加到 ~/.zshrc 或 ~/.bashrc
+eval "$(sunrise-xray proxy on)"
+```
+
+关代理时自动清理：
+
+```bash
+sunrise-xray off && eval "$(sunrise-xray proxy off)"
+```
+
+**传统方式：手动写死**（端口变了也要手动改 rc）
+
 ```bash
 # 加到 ~/.zshrc 或 ~/.bashrc
 export http_proxy=http://127.0.0.1:10809
@@ -552,6 +567,8 @@ sudo systemctl restart sunrise-xray
 | 列出所有节点 | `sunrise-xray list` |
 | 按名字切节点 | `sunrise-xray --node 香港 restart` |
 | 升级到最新版 | `curl -fsSL https://cdn.sunrise1024.top/sunrise-xray/install.sh \| bash && sunrise-xray restart` |
+| 输出代理环境变量（eval 用） | `sunrise-xray proxy on`（eval `"$(...)"`） |
+| 清理代理环境变量（eval 用） | `sunrise-xray proxy off`（eval `"$(...)"`） |
 | 清理缓存（重置） | `sunrise-xray off && rm -rf ~/.cache/sunrise-xray` |
 | 查端口谁在用 | `lsof -i :10808 -i :10809` |
 | 临时跳过代理（curl） | `curl --noproxy '*' https://内网地址` |

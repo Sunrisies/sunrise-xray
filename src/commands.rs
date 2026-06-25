@@ -258,6 +258,8 @@ pub fn cmd_stop() -> Result<()> {
         None => {
             println!("sunrise-xray 未在运行");
             clear_runtime_files()?;
+            println!();
+            print_proxy_off_hint();
             return Ok(());
         }
     };
@@ -271,7 +273,10 @@ pub fn cmd_stop() -> Result<()> {
         std::thread::sleep(Duration::from_millis(100));
         if !process_alive(pid) {
             clear_runtime_files()?;
+            println!();
             println!("✓ sunrise-xray 已停止 (PID {})", pid);
+            println!();
+            print_proxy_off_hint();
             return Ok(());
         }
     }
@@ -283,8 +288,40 @@ pub fn cmd_stop() -> Result<()> {
     }
     std::thread::sleep(Duration::from_millis(200));
     clear_runtime_files()?;
+    println!();
     println!("⚠ sunrise-xray 已强制停止 (PID {})", pid);
+    println!();
+    print_proxy_off_hint();
     Ok(())
+}
+
+fn print_proxy_off_hint() {
+    println!("💡 如果 shell 里设了 http_proxy / https_proxy / all_proxy，");
+    println!("   执行以下命令清理（或手动 unsert）：");
+    println!();
+    println!("   eval \"$(sunrise-xray proxy off)\"");
+    println!();
+    println!("   或在 ~/.zshrc / ~/.bashrc 里加一行开机自动设代理：");
+    println!("   eval \"$(sunrise-xray proxy on)\"");
+}
+
+/// 输出 shell eval 兼容的 proxy 环境变量 export 语句。
+/// 用户配一次 `eval "$(sunrise-xray proxy on)"` 到 shell rc 即可。
+pub fn cmd_proxy_on(socks_port: u16, http_port: u16) {
+    println!("# sunrise-xray proxy env — 开机自动设代理用 eval 执行这行");
+    println!("export http_proxy=http://127.0.0.1:{http_port}");
+    println!("export https_proxy=http://127.0.0.1:{http_port}");
+    println!("export all_proxy=socks5://127.0.0.1:{socks_port}");
+    println!("export no_proxy=\"localhost,127.0.0.1,::1,*.local\"");
+}
+
+/// 输出 shell eval 兼容的 proxy 环境变量 unset 语句。
+pub fn cmd_proxy_off() {
+    println!("# sunrise-xray proxy env — 清理代理环境变量");
+    println!("unset http_proxy");
+    println!("unset https_proxy");
+    println!("unset all_proxy");
+    println!("unset no_proxy");
 }
 
 /// `restart`：stop + start。

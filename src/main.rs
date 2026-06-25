@@ -43,6 +43,15 @@ struct Cli {
     command: Option<Command>,
 }
 
+/// proxy 子命令的子选项。
+#[derive(Subcommand, Debug)]
+enum ProxySub {
+    /// 输出 export http_proxy / https_proxy / all_proxy 语句（eval 用）。
+    On,
+    /// 输出 unset http_proxy / https_proxy / all_proxy 语句（eval 用）。
+    Off,
+}
+
 #[derive(Subcommand, Debug)]
 enum Command {
     /// 后台启动代理（同义词: on）。
@@ -83,6 +92,11 @@ enum Command {
     /// 健康检查 + 自动故障转移。当前节点失活时自动切到延迟最低的活节点。
     /// 适合放在 crontab 里定时跑（健康时秒退，cron 友好）。
     Autoswitch,
+
+    /// 输出 shell eval 兼容的代理环境变量（export / unset）。
+    /// 搭配 eval 使用：eval "$(sunrise-xray proxy on)" 或 eval "$(sunrise-xray proxy off)"。
+    #[command(subcommand)]
+    Proxy(ProxySub),
 }
 
 #[tokio::main]
@@ -128,6 +142,12 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
         (false, Some(Command::Autoswitch)) => {
             return commands::cmd_autoswitch(cli.socks_port, cli.http_port).await;
+        }
+        (false, Some(Command::Proxy(sub))) => {
+            return match sub {
+                ProxySub::On => Ok(commands::cmd_proxy_on(cli.socks_port, cli.http_port)),
+                ProxySub::Off => Ok(commands::cmd_proxy_off()),
+            };
         }
         (false, None) => {} // fall through to foreground 默认行为
     }
