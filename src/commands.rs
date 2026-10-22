@@ -446,6 +446,39 @@ pub async fn cmd_test(http_port: u16) -> Result<()> {
         }
     }
 
+    // Codex 请求设备码的接口。仅用 GET 探测，不提交 client_id，也不会创建登录码。
+    // Cloudflare challenge 的响应会带 cf-mitigated: challenge；普通 HTTP 响应只能说明
+    // 请求到达了认证服务，不能保证账号或实际 POST 登录请求一定可用。
+    total += 1;
+    let name = "Codex 登录认证";
+    let url = "https://auth.openai.com/api/accounts/deviceauth/usercode";
+    let start = std::time::Instant::now();
+    match client.get(url).send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            let elapsed = start.elapsed().as_millis();
+            let challenged = resp
+                .headers()
+                .get("cf-mitigated")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.eq_ignore_ascii_case("challenge"));
+
+            if challenged {
+                println!("  ✗ {:<24} {} Cloudflare challenge ({}ms)", name, status, elapsed);
+            } else if status.is_success() || status.is_redirection() || status.is_client_error() {
+                // GET 通常不是该接口的登录请求方式；400/405 等仍说明 HTTP 请求抵达服务端。
+                println!("  ✓ {:<24} HTTP 可达，{} ({}ms；未验证实际登录)", name, status, elapsed);
+                ok += 1;
+            } else {
+                println!("  ✗ {:<24} {} ({}ms)", name, status, elapsed);
+            }
+        }
+        Err(e) => {
+            let short = format!("{e}").chars().take(120).collect::<String>();
+            println!("  ✗ {:<24} 连接失败: {}", name, short);
+        }
+    }
+
     println!();
     println!("成功 {}/{}", ok, total);
     if ok == 0 {
